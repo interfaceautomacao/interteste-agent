@@ -1,95 +1,53 @@
-# InterTeste Agent
+# InterTeste Agent v2.0.0
 
-Agente local para comunicação Modbus TCP e Modbus RTU Serial com equipamentos industriais.
+Agente local para comunicação com inversores de frequência e equipamentos industriais via **Modbus TCP**, **Modbus RTU Serial**, **CANopen** e **CAN Raw**.
 
-## 📋 Requisitos
+Desenvolvido pela [Interface Automação](https://www.interfaceautomacao.com.br) para uso com a plataforma **InterTeste**.
 
-- Windows 10/11 ou Linux
-- Porta 9090 disponível
-- Para comunicação serial: drivers USB-Serial instalados
+## Novidades na v2.0.0
 
-## 🚀 Como usar
+- Suporte a CANopen via USB-CAN (SocketCAN no Linux, SLCAN no Windows)
+- Perfil Vacon NX (OPTC6) com 13 parâmetros via SDO
+- Perfil Vacon 100 (OPT-E6) com 11 parâmetros via SDO
+- Perfil CANopen DS402 genérico
+- Detecção automática de interfaces CAN disponíveis
+- Modo simulado para testes sem hardware
+
+## Protocolos Suportados
+
+- Modbus TCP (Ethernet)
+- Modbus RTU Serial (RS485/RS232 via USB-Serial)
+- CANopen via USB-CAN (PEAK PCAN-USB, CANable, Lawicel)
+- CAN Raw
+
+## Requisitos
+
+- Windows 10/11 ou Linux (Ubuntu 20.04+)
+- Node.js 18+
+- Para CAN no Linux: sudo apt install can-utils
+- Para CAN no Windows: driver do adaptador USB-CAN
+
+## Instalação
 
 ### Windows
+Baixe o instalador .exe na seção Releases e execute.
 
-1. Baixe o arquivo `interteste-agent-win.exe`
-2. Execute o arquivo (duplo clique ou via terminal)
-3. O agente irá iniciar na porta 9090
-4. Abra o InterTeste no navegador - ele detectará automaticamente o agente
+### Linux / Manual
+npm install && node index.js
 
-### Linux
+## Configuração CAN no Linux
 
-1. Baixe o arquivo `interteste-agent-linux`
-2. Torne o arquivo executável:
-   ```bash
-   chmod +x interteste-agent-linux
-   ```
-3. Execute:
-   ```bash
-   ./interteste-agent-linux
-   ```
-4. Abra o InterTeste no navegador - ele detectará automaticamente o agente
+sudo ip link set can0 up type can bitrate 500000
 
-## 🔌 Funcionalidades
+Interface para usar na plataforma: can0
 
-✅ **Modbus TCP** - Comunicação via Ethernet com inversores na rede local  
-✅ **Modbus RTU Serial** - Comunicação via RS485/RS232  
-✅ **Detecção automática** de portas seriais  
-✅ **Teste de conexão** em tempo real  
-✅ **Leitura e escrita** de registradores  
+## Configuração CAN no Windows
 
-## 🛠️ Configuração
+O adaptador USB-CAN aparece como COM3, COM4, etc. no Gerenciador de Dispositivos.
+Interface para usar na plataforma: COM3 (ou a porta detectada)
 
-O agente não requer configuração. Ele se comunica automaticamente com o InterTeste via WebSocket.
+## Porta WebSocket
 
-### Portas Seriais
+O agente escuta na porta 9090. A plataforma InterTeste conecta automaticamente.
 
-O agente detecta automaticamente todas as portas seriais disponíveis (COM1, COM2, /dev/ttyUSB0, etc.).
-
-### Modbus TCP
-
-Configure o IP e porta do equipamento diretamente no InterTeste. O agente se conectará automaticamente.
-
-## 🐛 Solução de Problemas
-
-### Agente não conecta
-
-- Verifique se a porta 9090 está disponível
-- Verifique o firewall (Windows Defender, iptables)
-- Execute como administrador (Windows) ou com sudo (Linux)
-
-### Porta serial não aparece
-
-- Verifique se os drivers USB-Serial estão instalados
-- No Linux, adicione seu usuário ao grupo `dialout`:
-  ```bash
-  sudo usermod -a -G dialout $USER
-  ```
-  (reinicie a sessão após executar)
-
-### Erro de comunicação Modbus
-
-- Verifique endereço Modbus (Unit ID) do equipamento
-- Verifique baudrate e paridade (Serial)
-- Verifique IP e porta (TCP)
-- Teste a conexão física (cabos, adaptadores)
-
-## 📝 Desenvolvimento
-
-Para desenvolvedores que desejam modificar o agente:
-
-```bash
-cd interteste-agent
-npm install
-npm start
-```
-
-Para gerar executáveis:
-
-```bash
-npm run build
-```
-
-## 📄 Licença
-
-© 2026 Interface Automação - Todos os direitos reservados
+(c) 2026 Interface Automacao
