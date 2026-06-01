@@ -38,17 +38,37 @@ jobs:
       - name: Instalar NSIS via Chocolatey
         run: choco install nsis -y
 
+      - name: Adicionar NSIS ao PATH
+        shell: pwsh
+        run: |
+          $nsisPath = "C:\Program Files (x86)\NSIS"
+          if (Test-Path $nsisPath) {
+            echo "$nsisPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+            echo "NSIS encontrado em: $nsisPath"
+          } else {
+            echo "NSIS não encontrado em $nsisPath, buscando..."
+            $found = Get-ChildItem -Path "C:\" -Recurse -Filter "makensis.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) {
+              $dir = $found.DirectoryName
+              echo "$dir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+              echo "makensis encontrado em: $dir"
+            } else {
+              echo "makensis não encontrado!"
+              exit 1
+            }
+          }
+
       - name: Compilar instalador NSIS
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.VERSION }}"
-          makensis /DAPP_VERSION_OVERRIDE=$version installer.nsi
+          & makensis /DAPP_VERSION_OVERRIDE=$version installer.nsi
           $outFile = "InterTeste-Agent-Setup-v${version}.exe"
           if (Test-Path $outFile) {
             $size = [math]::Round((Get-Item $outFile).Length / 1MB, 1)
-            echo "✓ Instalador gerado: $outFile ($size MB)"
+            echo "Instalador gerado: $outFile ($size MB)"
           } else {
-            echo "✗ Arquivo não encontrado: $outFile"
+            echo "Arquivo nao encontrado: $outFile"
             ls *.exe
             exit 1
           }
