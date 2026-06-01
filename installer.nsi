@@ -68,20 +68,8 @@ Section "InterTeste Agent" SecMain
   ; Copiar node_modules completo
   File /r "node_modules"
 
-  ; Criar o script de inicialização .bat
-  FileOpen $0 "$INSTDIR\interteste-agent.bat" w
-  FileWrite $0 "@echo off$\r$\n"
-  FileWrite $0 "title InterTeste Agent v${APP_VERSION}$\r$\n"
-  FileWrite $0 "cd /d $\"%~dp0\%\"$\r$\n"
-  FileWrite $0 "echo.$\r$\n"
-  FileWrite $0 "echo  =========================================$\r$\n"
-  FileWrite $0 "echo   InterTeste Agent v${APP_VERSION}$\r$\n"
-  FileWrite $0 "echo   Interface Automacao$\r$\n"
-  FileWrite $0 "echo  =========================================$\r$\n"
-  FileWrite $0 "echo.$\r$\n"
-  FileWrite $0 "node index.js$\r$\n"
-  FileWrite $0 "pause$\r$\n"
-  FileClose $0
+  ; Copiar o script de inicialização .bat
+  File "interteste-agent.bat"
 
   ; Criar atalho no Desktop
   CreateShortcut "$DESKTOP\InterTeste Agent.lnk" "$INSTDIR\interteste-agent.bat" "" "$INSTDIR\icon.ico" 0
