@@ -2,7 +2,7 @@ name: Build & Release Executables
 
 on:
   release:
-    types: [created]
+    types: [published]
   workflow_dispatch:
     inputs:
       tag:
@@ -11,8 +11,8 @@ on:
         default: 'v2.1.0'
 
 jobs:
-  build-windows:
-    name: Compilar instalador Windows (.exe)
+  build-windows-installer:
+    name: Compilar instalador Windows (.exe NSIS)
     runs-on: windows-latest
 
     steps:
@@ -23,36 +23,41 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-          cache: 'npm'
 
-      - name: Instalar dependências
-        run: npm ci
-
-      - name: Instalar pkg globalmente
-        run: npm install -g pkg
+      - name: Instalar dependências (com binários nativos Windows)
+        run: npm install
 
       - name: Extrair versão do package.json
         id: version
-        run: |
-          $version = node -e "process.stdout.write(require('./package.json').version)"
-          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
         shell: pwsh
-
-      - name: Compilar executável Windows com ícone
         run: |
-          mkdir -p dist
-          pkg index.js --targets node18-win-x64 --output "dist/InterTeste-Agent-v${{ steps.version.outputs.VERSION }}.exe" --icon icon.ico
-        shell: bash
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+          echo "Versão: $version"
 
-      - name: Verificar tamanho do executável
-        run: dir dist\
-        shell: cmd
+      - name: Instalar NSIS via Chocolatey
+        run: choco install nsis -y
 
-      - name: Upload do .exe para a release
+      - name: Compilar instalador NSIS
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.VERSION }}"
+          makensis /DAPP_VERSION_OVERRIDE=$version installer.nsi
+          $outFile = "InterTeste-Agent-Setup-v${version}.exe"
+          if (Test-Path $outFile) {
+            $size = [math]::Round((Get-Item $outFile).Length / 1MB, 1)
+            echo "✓ Instalador gerado: $outFile ($size MB)"
+          } else {
+            echo "✗ Arquivo não encontrado: $outFile"
+            ls *.exe
+            exit 1
+          }
+
+      - name: Upload do instalador para a release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.release.tag_name || github.event.inputs.tag }}
-          files: dist/InterTeste-Agent-v${{ steps.version.outputs.VERSION }}.exe
+          files: InterTeste-Agent-Setup-v${{ steps.version.outputs.VERSION }}.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

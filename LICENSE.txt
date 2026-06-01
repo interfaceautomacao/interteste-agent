@@ -1,0 +1,11 @@
+InterTeste Agent v2.1.0
+Copyright (c) 2026 Interface Automação
+
+Este software é fornecido exclusivamente para uso com a plataforma InterTeste
+da Interface Automação. Todos os direitos reservados.
+
+O uso deste software está sujeito aos termos e condições da Interface Automação.
+Para mais informações, acesse: https://www.interfaceautomacao.com.br
+
+AVISO: Este software não pode ser redistribuído, modificado ou utilizado
+para fins comerciais sem autorização expressa da Interface Automação.
