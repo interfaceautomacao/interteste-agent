@@ -1,0 +1,85 @@
+name: Build & Release Executables
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag da release para fazer upload dos binários (ex: v2.1.0)'
+        required: true
+        default: 'v2.1.0'
+
+jobs:
+  build-windows:
+    name: Compilar instalador Windows (.exe)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Instalar pkg globalmente
+        run: npm install -g pkg
+
+      - name: Compilar executável Windows
+        run: |
+          pkg index.js --targets node18-win-x64 --output dist/InterTeste-Agent.exe
+        shell: cmd
+
+      - name: Verificar tamanho do executável
+        run: dir dist\
+        shell: cmd
+
+      - name: Upload do .exe para a release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+          files: dist/InterTeste-Agent.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-linux:
+    name: Compilar binário Linux
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Instalar pkg globalmente
+        run: npm install -g pkg
+
+      - name: Compilar binário Linux x64
+        run: |
+          mkdir -p dist
+          pkg index.js --targets node18-linux-x64 --output dist/interteste-agent-linux
+
+      - name: Verificar tamanho do binário
+        run: ls -lh dist/
+
+      - name: Upload do binário Linux para a release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+          files: dist/interteste-agent-linux
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
