@@ -12,14 +12,14 @@ on:
 
 jobs:
   build-windows-installer:
-    name: Compilar instalador Windows (.exe NSIS)
+    name: Compilar instalador Windows (.exe NSIS com Node.js embutido)
     runs-on: windows-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 18
+      - name: Setup Node.js 18 (para instalar dependências)
         uses: actions/setup-node@v4
         with:
           node-version: '18'
@@ -35,6 +35,51 @@ jobs:
           echo "VERSION=$version" >> $env:GITHUB_OUTPUT
           echo "Versão: $version"
 
+      - name: Baixar Node.js 18 portable (zip) para embutir no instalador
+        shell: pwsh
+        run: |
+          $nodeVersion = "18.20.4"
+          $nodeUrl = "https://nodejs.org/dist/v${nodeVersion}/node-v${nodeVersion}-win-x64.zip"
+          echo "Baixando Node.js portable de: $nodeUrl"
+          Invoke-WebRequest -Uri $nodeUrl -OutFile "node-portable.zip" -UseBasicParsing
+          echo "Extraindo Node.js portable..."
+          Expand-Archive -Path "node-portable.zip" -DestinationPath "node-portable-extracted" -Force
+          # Mover para pasta node/ dentro do diretório do agente
+          $nodeDir = Get-ChildItem "node-portable-extracted" -Directory | Select-Object -First 1
+          New-Item -ItemType Directory -Path "node" -Force | Out-Null
+          Copy-Item "$($nodeDir.FullName)\*" "node\" -Recurse -Force
+          echo "Node.js portable pronto em: node\"
+          ls node\node.exe
+
+      - name: Preparar pasta agent-files com todos os arquivos
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path "agent-files" -Force | Out-Null
+          # Copiar arquivos do agente
+          Copy-Item "index.js" "agent-files\" -Force
+          Copy-Item "package.json" "agent-files\" -Force
+          if (Test-Path "package-lock.json") { Copy-Item "package-lock.json" "agent-files\" -Force }
+          if (Test-Path "icon.ico") { Copy-Item "icon.ico" "agent-files\" -Force }
+          # Copiar node_modules (com binários nativos já compilados para Windows)
+          Copy-Item "node_modules" "agent-files\node_modules" -Recurse -Force
+          # Copiar Node.js portable
+          Copy-Item "node" "agent-files\node" -Recurse -Force
+          echo "Conteúdo de agent-files:"
+          ls agent-files\
+
+      - name: Criar script de inicialização .bat
+        shell: pwsh
+        run: |
+          $bat = "@echo off`r`n"
+          $bat += "title InterTeste Agent`r`n"
+          $bat += "cd /d `"%~dp0`"`r`n"
+          $bat += "echo Iniciando InterTeste Agent...`r`n"
+          $bat += ".\\node\\node.exe index.js`r`n"
+          $bat += "pause`r`n"
+          $bat | Out-File -FilePath "agent-files\interteste-agent.bat" -Encoding ASCII
+          echo "Script .bat criado"
+          cat agent-files\interteste-agent.bat
+
       - name: Instalar NSIS via Chocolatey
         run: choco install nsis -y
 
@@ -46,7 +91,6 @@ jobs:
             echo "$nsisPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
             echo "NSIS encontrado em: $nsisPath"
           } else {
-            echo "NSIS não encontrado em $nsisPath, buscando..."
             $found = Get-ChildItem -Path "C:\" -Recurse -Filter "makensis.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($found) {
               $dir = $found.DirectoryName
@@ -68,7 +112,7 @@ jobs:
             $size = [math]::Round((Get-Item $outFile).Length / 1MB, 1)
             echo "Instalador gerado: $outFile ($size MB)"
           } else {
-            echo "Arquivo nao encontrado: $outFile"
+            echo "Arquivo não encontrado: $outFile"
             ls *.exe
             exit 1
           }

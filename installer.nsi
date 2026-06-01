@@ -59,24 +59,15 @@ Section "InterTeste Agent" SecMain
 
   SetOutPath "$INSTDIR"
 
-  ; Copiar todos os arquivos do agente
-  File "index.js"
-  File "package.json"
-  File "package-lock.json"
-  File "icon.ico"
+  ; Copiar todos os arquivos do agente (incluindo Node.js portable e node_modules)
+  File /r "agent-files\*.*"
 
-  ; Copiar node_modules completo
-  File /r "node_modules"
-
-  ; Copiar o script de inicialização .bat
-  File "interteste-agent.bat"
-
-  ; Criar atalho no Desktop
-  CreateShortcut "$DESKTOP\InterTeste Agent.lnk" "$INSTDIR\interteste-agent.bat" "" "$INSTDIR\icon.ico" 0
+  ; Criar atalho no Desktop (janela minimizada para não incomodar)
+  CreateShortcut "$DESKTOP\InterTeste Agent.lnk" "$INSTDIR\interteste-agent.bat" "" "$INSTDIR\icon.ico" 0 SW_SHOWMINIMIZED
 
   ; Criar atalho no Menu Iniciar
   CreateDirectory "$SMPROGRAMS\InterTeste Agent"
-  CreateShortcut "$SMPROGRAMS\InterTeste Agent\InterTeste Agent.lnk" "$INSTDIR\interteste-agent.bat" "" "$INSTDIR\icon.ico" 0
+  CreateShortcut "$SMPROGRAMS\InterTeste Agent\InterTeste Agent.lnk" "$INSTDIR\interteste-agent.bat" "" "$INSTDIR\icon.ico" 0 SW_SHOWMINIMIZED
   CreateShortcut "$SMPROGRAMS\InterTeste Agent\Desinstalar.lnk" "$INSTDIR\Uninstall.exe"
 
   ; Registrar no Adicionar/Remover Programas
@@ -99,8 +90,9 @@ SectionEnd
 
 ; ==================== SEÇÃO DESINSTALADOR ====================
 Section "Uninstall"
-  ; Remover arquivos
+  ; Remover todos os arquivos instalados
   RMDir /r "$INSTDIR\node_modules"
+  RMDir /r "$INSTDIR\node"
   Delete "$INSTDIR\index.js"
   Delete "$INSTDIR\package.json"
   Delete "$INSTDIR\package-lock.json"
