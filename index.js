@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * InterTeste Agent v2.0.0
+ * InterTeste Agent v2.1.0
  * Interface Automação - Agente Local para Comunicação com Inversores
  *
  * Suporta:
@@ -22,7 +22,7 @@ const { SerialPort } = require('serialport');
 const { execSync, spawn } = require('child_process');
 
 const PORT = 9090;
-const VERSION = '2.0.0';
+const VERSION = '2.1.0';
 
 console.log(`
 ╔═══════════════════════════════════════════════════════════╗

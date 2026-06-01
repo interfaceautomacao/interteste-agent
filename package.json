@@ -6,7 +6,9 @@
   "bin": "index.js",
   "scripts": {
     "start": "node index.js",
-    "build": "pkg . --targets node18-win-x64,node18-linux-x64 --output dist/interteste-agent"
+    "build:win": "pkg index.js --targets node18-win-x64 --output dist/InterTeste-Agent-v2.1.0.exe",
+    "build:linux": "pkg index.js --targets node18-linux-x64 --output dist/interteste-agent-linux-v2.1.0",
+    "build": "npm run build:win && npm run build:linux"
   },
   "keywords": [
     "modbus",
@@ -34,6 +36,10 @@
   "pkg": {
     "assets": [
       "node_modules/**/*"
+    ],
+    "scripts": [
+      "node_modules/serialport/**/*.js",
+      "node_modules/modbus-serial/**/*.js"
     ],
     "targets": [
       "node18-win-x64",
