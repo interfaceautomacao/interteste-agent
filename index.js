@@ -342,9 +342,123 @@ const wss = new WebSocket.Server({ port: PORT });
 console.log(`✓ Servidor WebSocket iniciado na porta ${PORT}`);
 console.log(`✓ Aguardando conexões do InterTeste...\n`);
 
-const modbusClients = new Map();
-const canClients = new Map();
 const pollingIntervals = new Map();
+const canClients = new Map();
+const cycleIntervals = new Map();   // clientId -> { interval, state }
+const powerMeterClients = new Map(); // clientId -> ModbusRTU client for power meter
+
+// ==================== DRIVE CONTROL PROFILES ====================
+// Registradores de controle por fabricante (Modbus)
+const DRIVE_CONTROL_PROFILES = {
+  // WEG CFW-11 / CFW-700 / CFW-900
+  weg: {
+    controlWord:   { address: 682, type: 'holding' }, // P682 - Palavra de Controle
+    speedRef:      { address: 683, type: 'holding' }, // P683 - Referência de Velocidade (0-32767 = 0-100%)
+    statusWord:    { address: 680, type: 'holding' }, // P680 - Palavra de Status
+    outputFreq:    { address: 2, type: 'holding' },   // P002 - Frequência de Saída
+    outputCurrent: { address: 3, type: 'holding' },   // P003 - Corrente de Saída
+    motorSpeed:    { address: 4, type: 'holding' },   // P004 - Velocidade do Motor
+    // Comandos de controle (P682)
+    CMD_STOP:      0x0000, // Parar
+    CMD_RUN_FWD:   0x0001, // Habilitar + Sentido Horário
+    CMD_RUN_REV:   0x0002, // Habilitar + Sentido Anti-Horário
+    CMD_RESET:     0x0080, // Reset de falha
+    // Velocidade nominal: 32767 = 60Hz (ajustar conforme P134)
+    SPEED_NOMINAL: 32767,
+    SPEED_ZERO:    0,
+  },
+  // Schneider ATV320 / ATV340 / ATV630 / ATV930
+  schneider: {
+    controlWord:   { address: 8501, type: 'holding' }, // CMD
+    speedRef:      { address: 8502, type: 'holding' }, // LFRD (0-10000 = 0-100%)
+    statusWord:    { address: 3201, type: 'holding' }, // ETA
+    outputFreq:    { address: 3202, type: 'holding' }, // RFRD
+    outputCurrent: { address: 3204, type: 'holding' }, // LCR
+    motorSpeed:    { address: 3203, type: 'holding' }, // SPD
+    CMD_STOP:      0x0006, // Inibir
+    CMD_RUN_FWD:   0x000F, // Habilitar + Frente
+    CMD_RUN_REV:   0x080F, // Habilitar + Ré
+    CMD_RESET:     0x0086, // Reset de falha
+    SPEED_NOMINAL: 10000,
+    SPEED_ZERO:    0,
+  },
+  // ABB ACS355 / ACS550 / ACS880
+  abb: {
+    controlWord:   { address: 1, type: 'holding' },   // 1.01 Control Word
+    speedRef:      { address: 2, type: 'holding' },   // 1.02 Speed Ref (0-20000 = 0-100%)
+    statusWord:    { address: 3, type: 'holding' },   // 1.03 Status Word
+    outputFreq:    { address: 102, type: 'holding' }, // 1.102 Output Freq
+    outputCurrent: { address: 103, type: 'holding' }, // 1.103 Output Current
+    motorSpeed:    { address: 104, type: 'holding' }, // 1.104 Motor Speed
+    CMD_STOP:      0x0002,
+    CMD_RUN_FWD:   0x0006,
+    CMD_RUN_REV:   0x0026,
+    CMD_RESET:     0x0082,
+    SPEED_NOMINAL: 20000,
+    SPEED_ZERO:    0,
+  },
+  // Danfoss FC302 / FC102
+  danfoss: {
+    controlWord:   { address: 1000, type: 'holding' }, // 8-10 Control Word
+    speedRef:      { address: 1001, type: 'holding' }, // 8-11 Speed Ref (-32768 a 32767)
+    statusWord:    { address: 1002, type: 'holding' }, // 8-12 Status Word
+    outputFreq:    { address: 1500, type: 'holding' }, // 16-13 Freq. Saída
+    outputCurrent: { address: 1501, type: 'holding' }, // 16-14 Corrente
+    motorSpeed:    { address: 1502, type: 'holding' }, // 16-15 Velocidade
+    CMD_STOP:      0x0002,
+    CMD_RUN_FWD:   0x0006,
+    CMD_RUN_REV:   0x0026,
+    CMD_RESET:     0x0082,
+    SPEED_NOMINAL: 16384,
+    SPEED_ZERO:    0,
+  },
+  // Siemens G120 / G120C
+  siemens: {
+    controlWord:   { address: 63, type: 'holding' },  // STW1
+    speedRef:      { address: 64, type: 'holding' },  // NSOLL_A (0-16384 = 0-100%)
+    statusWord:    { address: 65, type: 'holding' },  // ZSW1
+    outputFreq:    { address: 66, type: 'holding' },  // NIST_A
+    outputCurrent: { address: 68, type: 'holding' },  // IIST
+    motorSpeed:    { address: 67, type: 'holding' },  // NIST_B
+    CMD_STOP:      0x047E,
+    CMD_RUN_FWD:   0x047F,
+    CMD_RUN_REV:   0x0C7F,
+    CMD_RESET:     0x04FE,
+    SPEED_NOMINAL: 16384,
+    SPEED_ZERO:    0,
+  },
+  // Genérico (DS402 / qualquer Modbus)
+  generic: {
+    controlWord:   { address: 40001, type: 'holding' },
+    speedRef:      { address: 40002, type: 'holding' },
+    statusWord:    { address: 40003, type: 'holding' },
+    outputFreq:    { address: 40004, type: 'holding' },
+    outputCurrent: { address: 40005, type: 'holding' },
+    motorSpeed:    { address: 40006, type: 'holding' },
+    CMD_STOP:      0x0000,
+    CMD_RUN_FWD:   0x0001,
+    CMD_RUN_REV:   0x0002,
+    CMD_RESET:     0x0080,
+    SPEED_NOMINAL: 1000,
+    SPEED_ZERO:    0,
+  },
+};
+
+// Registradores do multimedidor (Modbus RTU) - compatível com Carlo Gavazzi, Schneider PM, Siemens PAC
+const POWER_METER_REGISTERS = [
+  { id: 'pm_v1',  name: 'Tensão L1',      unit: 'V',   address: 0,  type: 'input', scaleFactor: 0.1 },
+  { id: 'pm_v2',  name: 'Tensão L2',      unit: 'V',   address: 2,  type: 'input', scaleFactor: 0.1 },
+  { id: 'pm_v3',  name: 'Tensão L3',      unit: 'V',   address: 4,  type: 'input', scaleFactor: 0.1 },
+  { id: 'pm_i1',  name: 'Corrente L1',    unit: 'A',   address: 6,  type: 'input', scaleFactor: 0.001 },
+  { id: 'pm_i2',  name: 'Corrente L2',    unit: 'A',   address: 8,  type: 'input', scaleFactor: 0.001 },
+  { id: 'pm_i3',  name: 'Corrente L3',    unit: 'A',   address: 10, type: 'input', scaleFactor: 0.001 },
+  { id: 'pm_p',   name: 'Potência Ativa', unit: 'kW',  address: 12, type: 'input', scaleFactor: 0.001 },
+  { id: 'pm_q',   name: 'Potência Reativa', unit: 'kVAr', address: 14, type: 'input', scaleFactor: 0.001 },
+  { id: 'pm_s',   name: 'Potência Aparente', unit: 'kVA', address: 16, type: 'input', scaleFactor: 0.001 },
+  { id: 'pm_pf',  name: 'Fator de Potência', unit: '',  address: 18, type: 'input', scaleFactor: 0.001 },
+  { id: 'pm_f',   name: 'Frequência',     unit: 'Hz',  address: 20, type: 'input', scaleFactor: 0.01 },
+  { id: 'pm_kwh', name: 'Energia Acum.',  unit: 'kWh', address: 22, type: 'input', scaleFactor: 0.01 },
+];
 
 wss.on('connection', (ws) => {
   const clientId = Math.random().toString(36).substring(7);
@@ -385,6 +499,13 @@ wss.on('connection', (ws) => {
           ws.send(JSON.stringify({ type: 'pollingStopped', success: true }));
           break;
         case 'getCanProfile': handleGetCanProfile(ws, data.profile); break;
+        // ===== DRIVE CONTROL =====
+        case 'driveCommand': await handleDriveCommand(ws, mbClient, clientId, data.params); break;
+        case 'startCycle': await handleStartCycle(ws, mbClient, clientId, data.params); break;
+        case 'stopCycle': handleStopCycle(clientId, ws); break;
+        // ===== POWER METER =====
+        case 'connectPowerMeter': await handleConnectPowerMeter(ws, clientId, data.config); break;
+        case 'disconnectPowerMeter': handleDisconnectPowerMeter(clientId, ws); break;
         case 'disconnect':
           handleStopPolling(clientId);
           if (mbClient.isOpen) mbClient.close(() => {});
@@ -654,8 +775,194 @@ function handleStopPolling(clientId) {
   if (interval) { clearInterval(interval); pollingIntervals.delete(clientId); console.log(`[${clientId}] Polling parado`); }
 }
 
+// ==================== DRIVE CONTROL HANDLERS ====================
+
+async function writeMbRegister(client, address, value, regType) {
+  client.setID(client._unitID || 1);
+  if (regType === 'coil') await client.writeCoil(address, value !== 0);
+  else await client.writeRegister(address, value);
+}
+
+async function handleDriveCommand(ws, client, clientId, params) {
+  // params: { driveProfile, command, speedPercent, modbusAddress }
+  try {
+    const profile = DRIVE_CONTROL_PROFILES[params.driveProfile || 'generic'];
+    if (!profile) throw new Error(`Perfil de controle desconhecido: ${params.driveProfile}`);
+    if (params.modbusAddress) client.setID(params.modbusAddress);
+    let cmdWord, speedValue;
+    switch (params.command) {
+      case 'stop':
+        cmdWord = profile.CMD_STOP;
+        speedValue = profile.SPEED_ZERO;
+        break;
+      case 'run_fwd':
+        cmdWord = profile.CMD_RUN_FWD;
+        speedValue = Math.round((params.speedPercent || 100) / 100 * profile.SPEED_NOMINAL);
+        break;
+      case 'run_rev':
+        cmdWord = profile.CMD_RUN_REV;
+        speedValue = Math.round((params.speedPercent || 100) / 100 * profile.SPEED_NOMINAL);
+        break;
+      case 'reset_fault':
+        cmdWord = profile.CMD_RESET;
+        speedValue = null;
+        break;
+      case 'set_speed':
+        speedValue = Math.round((params.speedPercent || 0) / 100 * profile.SPEED_NOMINAL);
+        cmdWord = null;
+        break;
+      default:
+        throw new Error(`Comando desconhecido: ${params.command}`);
+    }
+    if (speedValue !== null) {
+      await writeMbRegister(client, profile.speedRef.address, speedValue, profile.speedRef.type);
+    }
+    if (cmdWord !== null) {
+      await writeMbRegister(client, profile.controlWord.address, cmdWord, profile.controlWord.type);
+    }
+    ws.send(JSON.stringify({ type: 'driveCommandResult', success: true, command: params.command, cmdWord, speedValue, timestamp: Date.now() }));
+  } catch (err) {
+    ws.send(JSON.stringify({ type: 'driveCommandResult', success: false, command: params.command, error: err.message, timestamp: Date.now() }));
+  }
+}
+
+// Ciclo de teste automático
+// Etapas: start_fwd → accel → hold_nominal → decel → stop → pause → start_rev → accel_rev → hold_rev → decel_rev → stop
+async function handleStartCycle(ws, client, clientId, params) {
+  // params: { driveProfile, mode ('auto'|'manual'), cycles, accelTime, holdTime, decelTime, pauseTime, modbusAddress }
+  handleStopCycle(clientId, null); // para ciclo anterior se houver
+  const profile = DRIVE_CONTROL_PROFILES[params.driveProfile || 'generic'];
+  if (!profile) {
+    ws.send(JSON.stringify({ type: 'cycleError', error: `Perfil desconhecido: ${params.driveProfile}`, timestamp: Date.now() }));
+    return;
+  }
+  if (params.modbusAddress) client.setID(params.modbusAddress);
+  const accelTime  = (params.accelTime  || 10) * 1000; // ms
+  const holdTime   = (params.holdTime   || 30) * 1000;
+  const decelTime  = (params.decelTime  || 10) * 1000;
+  const pauseTime  = (params.pauseTime  || 5)  * 1000;
+  const maxCycles  = params.mode === 'auto' ? (params.cycles || 3) : Infinity;
+  const STEPS_PER_CYCLE = 10; // número de passos por ciclo
+  const SPEED_STEPS = 10;     // quantos passos de aceleração
+  let cycleCount = 0;
+  let aborted = false;
+  const sendStatus = (step, direction, speedPct, phase) => {
+    ws.send(JSON.stringify({ type: 'cycleStatus', cycleCount, maxCycles, step, direction, speedPct, phase, timestamp: Date.now() }));
+  };
+  const sleep = (ms) => new Promise(resolve => {
+    const t = setTimeout(resolve, ms);
+    const state = cycleIntervals.get(clientId);
+    if (state) state.timeouts = state.timeouts || [];
+    if (state) state.timeouts.push(t);
+  });
+  const runCycle = async (direction) => {
+    const cmdRun = direction === 'fwd' ? profile.CMD_RUN_FWD : profile.CMD_RUN_REV;
+    const dir = direction === 'fwd' ? 'Horário' : 'Anti-Horário';
+    // Aceleração gradual
+    sendStatus('accel', dir, 0, `Acelerando (${dir})`);
+    for (let i = 1; i <= SPEED_STEPS && !aborted; i++) {
+      const pct = i * 10;
+      const speedVal = Math.round(pct / 100 * profile.SPEED_NOMINAL);
+      await writeMbRegister(client, profile.speedRef.address, speedVal, profile.speedRef.type);
+      if (i === 1) await writeMbRegister(client, profile.controlWord.address, cmdRun, profile.controlWord.type);
+      sendStatus('accel', dir, pct, `Acelerando ${pct}%`);
+      await sleep(accelTime / SPEED_STEPS);
+    }
+    if (aborted) return;
+    // Manter velocidade nominal
+    sendStatus('hold', dir, 100, `Velocidade Nominal (${dir})`);
+    await sleep(holdTime);
+    if (aborted) return;
+    // Desaceleração gradual
+    sendStatus('decel', dir, 100, `Desacelerando (${dir})`);
+    for (let i = SPEED_STEPS - 1; i >= 0 && !aborted; i--) {
+      const pct = i * 10;
+      const speedVal = Math.round(pct / 100 * profile.SPEED_NOMINAL);
+      await writeMbRegister(client, profile.speedRef.address, speedVal, profile.speedRef.type);
+      sendStatus('decel', dir, pct, `Desacelerando ${pct}%`);
+      await sleep(decelTime / SPEED_STEPS);
+    }
+    if (aborted) return;
+    // Parar
+    await writeMbRegister(client, profile.controlWord.address, profile.CMD_STOP, profile.controlWord.type);
+    sendStatus('stop', dir, 0, 'Parado');
+    await sleep(pauseTime);
+  };
+  const state = { aborted: false, timeouts: [] };
+  cycleIntervals.set(clientId, state);
+  // Executar ciclos em background
+  (async () => {
+    try {
+      ws.send(JSON.stringify({ type: 'cycleStarted', mode: params.mode, maxCycles, timestamp: Date.now() }));
+      while (!state.aborted && cycleCount < maxCycles) {
+        cycleCount++;
+        ws.send(JSON.stringify({ type: 'cycleBegin', cycleNumber: cycleCount, maxCycles, timestamp: Date.now() }));
+        // Sentido horário
+        aborted = state.aborted;
+        if (!aborted) await runCycle('fwd');
+        // Sentido anti-horário
+        aborted = state.aborted;
+        if (!aborted) await runCycle('rev');
+        if (state.aborted) break;
+        ws.send(JSON.stringify({ type: 'cycleComplete', cycleNumber: cycleCount, maxCycles, timestamp: Date.now() }));
+      }
+      if (!state.aborted) {
+        await writeMbRegister(client, profile.controlWord.address, profile.CMD_STOP, profile.controlWord.type);
+        ws.send(JSON.stringify({ type: 'cycleFinished', totalCycles: cycleCount, timestamp: Date.now() }));
+      }
+    } catch (err) {
+      ws.send(JSON.stringify({ type: 'cycleError', error: err.message, timestamp: Date.now() }));
+    } finally {
+      cycleIntervals.delete(clientId);
+    }
+  })();
+}
+
+function handleStopCycle(clientId, ws) {
+  const state = cycleIntervals.get(clientId);
+  if (state) {
+    state.aborted = true;
+    (state.timeouts || []).forEach(t => clearTimeout(t));
+    cycleIntervals.delete(clientId);
+  }
+  if (ws) ws.send(JSON.stringify({ type: 'cycleStopped', timestamp: Date.now() }));
+}
+
+// ==================== POWER METER HANDLERS ====================
+
+async function handleConnectPowerMeter(ws, clientId, config) {
+  // config: { commType, serialPort, baudRate, modbusAddress, tcpHost, tcpPort }
+  try {
+    let pmClient = powerMeterClients.get(clientId);
+    if (pmClient && pmClient.isOpen) pmClient.close(() => {});
+    pmClient = new ModbusRTU();
+    if (config.commType === 'tcp') {
+      await pmClient.connectTCP(config.tcpHost, { port: config.tcpPort || 502 });
+    } else {
+      await pmClient.connectRTUBuffered(config.serialPort, { baudRate: config.baudRate || 9600, dataBits: 8, stopBits: 1, parity: 'none' });
+    }
+    pmClient.setTimeout(1500);
+    pmClient.setID(config.modbusAddress || 1);
+    powerMeterClients.set(clientId, pmClient);
+    // Ler uma amostra para confirmar conexão
+    const sample = await pmClient.readInputRegisters(0, 2);
+    ws.send(JSON.stringify({ type: 'powerMeterConnected', success: true, sampleVoltage: sample.data[0] * 0.1, timestamp: Date.now() }));
+  } catch (err) {
+    ws.send(JSON.stringify({ type: 'powerMeterConnected', success: false, error: err.message, timestamp: Date.now() }));
+  }
+}
+
+function handleDisconnectPowerMeter(clientId, ws) {
+  const pmClient = powerMeterClients.get(clientId);
+  if (pmClient && pmClient.isOpen) pmClient.close(() => {});
+  powerMeterClients.delete(clientId);
+  ws.send(JSON.stringify({ type: 'powerMeterDisconnected', success: true, timestamp: Date.now() }));
+}
+
+// Sobrescrever handleStartPolling para incluir leitura do multimedidor em paralelo
+const _originalHandleStartPolling = handleStartPolling;
+
 process.on('uncaughtException', (err) => console.error('Erro não capturado:', err));
 process.on('unhandledRejection', (reason) => console.error('Promise rejeitada:', reason));
-
 console.log('✓ Agente pronto para receber comandos');
 console.log('✓ Suporte: Modbus TCP | Modbus RTU Serial | CANopen | CAN Raw\n');
