@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * InterTeste Agent v2.1.0
+ * InterTeste Agent v2.0.0
  * Interface Automação - Agente Local para Comunicação com Inversores
  *
  * Suporta:
@@ -20,14 +20,16 @@ const WebSocket = require('ws');
 const ModbusRTU = require('modbus-serial');
 const { SerialPort } = require('serialport');
 const { execSync, spawn } = require('child_process');
+const http = require('http');
 
 const PORT = 9090;
-const VERSION = '2.1.0';
+const HTTP_PORT = 7878;
+const VERSION = '2.1.1';
 
 console.log(`
 ╔═══════════════════════════════════════════════════════════╗
 ║                                                           ║
-║   InterTeste Agent v${VERSION}                            ║
+║   InterTeste Agent v${VERSION}                          ║
 ║   Interface Automação - Agente Local                     ║
 ║   Modbus TCP | Modbus RTU | CANopen | CAN Raw            ║
 ║                                                           ║
@@ -346,6 +348,7 @@ const pollingIntervals = new Map();
 const canClients = new Map();
 const cycleIntervals = new Map();   // clientId -> { interval, state }
 const powerMeterClients = new Map(); // clientId -> ModbusRTU client for power meter
+const modbusClients = new Map();    // clientId -> ModbusRTU client for drive communication
 
 // ==================== DRIVE CONTROL PROFILES ====================
 // Registradores de controle por fabricante (Modbus)
@@ -964,5 +967,39 @@ const _originalHandleStartPolling = handleStartPolling;
 
 process.on('uncaughtException', (err) => console.error('Erro não capturado:', err));
 process.on('unhandledRejection', (reason) => console.error('Promise rejeitada:', reason));
+
+// ==================== HTTP HEALTH SERVER (porta 7878) ====================
+// O servidor na nuvem verifica a saúde do agente via GET http://localhost:7878/health
+const httpServer = http.createServer((req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Content-Type', 'application/json');
+  if (req.url === '/health' || req.url === '/') {
+    SerialPort.list().then((ports) => {
+      res.writeHead(200);
+      res.end(JSON.stringify({
+        status: 'ok',
+        version: VERSION,
+        wsPort: PORT,
+        httpPort: HTTP_PORT,
+        capabilities: ['modbus_tcp', 'modbus_rtu', 'modbus_rtu_serial', 'canopen', 'can_raw'],
+        serialPorts: ports.map(p => ({ path: p.path, manufacturer: p.manufacturer || null })),
+        timestamp: Date.now()
+      }));
+    }).catch(() => {
+      res.writeHead(200);
+      res.end(JSON.stringify({ status: 'ok', version: VERSION, wsPort: PORT, httpPort: HTTP_PORT, timestamp: Date.now() }));
+    });
+  } else {
+    res.writeHead(404);
+    res.end(JSON.stringify({ error: 'Not found' }));
+  }
+});
+httpServer.listen(HTTP_PORT, '127.0.0.1', () => {
+  console.log(`✓ Servidor HTTP health iniciado na porta ${HTTP_PORT} (http://localhost:${HTTP_PORT}/health)`);
+});
+httpServer.on('error', (err) => {
+  console.error(`✗ Erro no servidor HTTP porta ${HTTP_PORT}:`, err.message);
+});
+
 console.log('✓ Agente pronto para receber comandos');
 console.log('✓ Suporte: Modbus TCP | Modbus RTU Serial | CANopen | CAN Raw\n');
