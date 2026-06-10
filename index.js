@@ -24,7 +24,7 @@ const http = require('http');
 
 const PORT = 9090;
 const HTTP_PORT = 7878;
-const VERSION = '2.1.4';
+const VERSION = '2.1.5';
 
 console.log(`
 ╔═══════════════════════════════════════════════════════════╗
@@ -354,6 +354,11 @@ const modbusClients = new Map();    // clientId -> ModbusRTU client for drive co
 // Registradores de controle por fabricante (Modbus)
 const DRIVE_CONTROL_PROFILES = {
   // WEG CFW-11 / CFW-700 / CFW-900
+  // P682 bits (Manual Serial CFW-11 0899.5741, Tabela 3.4):
+  //   Bit0 = Start/Stop (1=rodar, 0=parar com rampa)
+  //   Bit1 = General Enabling (1=habilita inversor, 0=desabilita)
+  //   Bit2 = Direction of Rotation (0=horário, 1=anti-horário)
+  //   Bit7 = Fault Reset (1=reset de falha)
   weg: {
     controlWord:   { address: 682, type: 'holding' }, // P682 - Palavra de Controle
     speedRef:      { address: 683, type: 'holding' }, // P683 - Referência de Velocidade (0-32767 = 0-100%)
@@ -361,13 +366,14 @@ const DRIVE_CONTROL_PROFILES = {
     outputFreq:    { address: 2, type: 'holding' },   // P002 - Frequência de Saída
     outputCurrent: { address: 3, type: 'holding' },   // P003 - Corrente de Saída
     motorSpeed:    { address: 4, type: 'holding' },   // P004 - Velocidade do Motor
-    // Comandos de controle (P682)
-    CMD_STOP:      0x0000, // Parar
-    CMD_RUN_FWD:   0x0001, // Habilitar + Sentido Horário
-    CMD_RUN_REV:   0x0002, // Habilitar + Sentido Anti-Horário
-    CMD_RESET:     0x0080, // Reset de falha
-    // Velocidade nominal: 32767 = 60Hz (ajustar conforme P134)
-    SPEED_NOMINAL: 32767,
+    // Comandos de controle (P682) — conforme manual serial CFW-11 (0899.5741)
+    CMD_STOP:      0x0002, // Bit1=1 (habilita), Bit0=0 (para com rampa) — mantém inversor habilitado
+    CMD_RUN_FWD:   0x0003, // Bit1=1 (habilita), Bit0=1 (start), Bit2=0 (sentido horário)
+    CMD_RUN_REV:   0x0007, // Bit1=1 (habilita), Bit0=1 (start), Bit2=1 (sentido anti-horário)
+    CMD_RESET:     0x0082, // Bit7=1 (fault reset), Bit1=1 (habilita)
+    // P683: escala 13 bits com sinal — 16383 ≈ 50% da freq. máx. (P0134)
+    // Para 60Hz nominal, 32767 = 60Hz. Usar 16383 para segurança nos testes.
+    SPEED_NOMINAL: 16383,
     SPEED_ZERO:    0,
   },
   // Schneider ATV320 / ATV340 / ATV630 / ATV930
