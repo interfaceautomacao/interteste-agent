@@ -24,7 +24,7 @@ const http = require('http');
 
 const PORT = 9090;
 const HTTP_PORT = 7878;
-const VERSION = '2.1.2';
+const VERSION = '2.1.3';
 
 console.log(`
 ╔═══════════════════════════════════════════════════════════╗
@@ -782,7 +782,7 @@ function handleStopPolling(clientId) {
 
 async function writeMbRegister(client, address, value, regType) {
   if (!client || !client.isOpen) throw new Error('Cliente Modbus não está conectado. Verifique a conexão na aba Comunicação antes de iniciar o ciclo.');
-  client.setID(client._unitID || 1);
+  // NÃO sobrescrever o setID aqui — o endereço já foi configurado pelo handleStartCycle
   if (regType === 'coil') await client.writeCoil(address, value !== 0);
   else await client.writeRegister(address, value);
 }
@@ -845,6 +845,14 @@ async function handleStartCycle(ws, client, clientId, params) {
     ws.send(JSON.stringify({ type: 'cycleError', error: `Perfil desconhecido: ${params.driveProfile}`, timestamp: Date.now() }));
     return;
   }
+  // CRÍTICO: Pausar o polling durante o ciclo para evitar colisão de requisições no mesmo cliente Modbus
+  // A biblioteca modbus-serial é serial — não suporta leitura e escrita simultâneas
+  const pollingWasActive = pollingIntervals.has(clientId);
+  if (pollingWasActive) {
+    handleStopPolling(clientId);
+    console.log(`[${clientId}] Polling pausado para execução do ciclo automático`);
+  }
+  // Configurar o endereço Modbus correto para o ciclo
   if (params.modbusAddress) client.setID(params.modbusAddress);
   const accelTime  = (params.accelTime  || 10) * 1000; // ms
   const holdTime   = (params.holdTime   || 30) * 1000;
@@ -923,6 +931,11 @@ async function handleStartCycle(ws, client, clientId, params) {
       ws.send(JSON.stringify({ type: 'cycleError', error: err.message, timestamp: Date.now() }));
     } finally {
       cycleIntervals.delete(clientId);
+      // Retomar o polling se estava ativo antes do ciclo
+      if (pollingWasActive) {
+        ws.send(JSON.stringify({ type: 'cyclePollingResumed', message: 'Polling retomado após ciclo', timestamp: Date.now() }));
+        console.log(`[${clientId}] Ciclo concluído. Polling deve ser retomado pelo frontend.`);
+      }
     }
   })();
 }
