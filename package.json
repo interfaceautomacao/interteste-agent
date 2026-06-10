@@ -1,13 +1,13 @@
 {
   "name": "interteste-agent",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "description": "Agente local para comunicação Modbus TCP/RTU e CANopen/CAN via USB-CAN do InterTeste",
   "main": "index.js",
   "bin": "index.js",
   "scripts": {
     "start": "node index.js",
-    "build:win": "pkg index.js --targets node18-win-x64 --output dist/InterTeste-Agent-v2.1.1.exe",
-    "build:linux": "pkg index.js --targets node18-linux-x64 --output dist/interteste-agent-linux-v2.1.1",
+    "build:win": "pkg index.js --targets node18-win-x64 --output dist/InterTeste-Agent-v2.1.2.exe",
+    "build:linux": "pkg index.js --targets node18-linux-x64 --output dist/interteste-agent-linux-v2.1.2",
     "build": "npm run build:win && npm run build:linux"
   },
   "keywords": [

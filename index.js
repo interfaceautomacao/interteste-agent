@@ -24,7 +24,7 @@ const http = require('http');
 
 const PORT = 9090;
 const HTTP_PORT = 7878;
-const VERSION = '2.1.1';
+const VERSION = '2.1.2';
 
 console.log(`
 ╔═══════════════════════════════════════════════════════════╗
@@ -781,6 +781,7 @@ function handleStopPolling(clientId) {
 // ==================== DRIVE CONTROL HANDLERS ====================
 
 async function writeMbRegister(client, address, value, regType) {
+  if (!client || !client.isOpen) throw new Error('Cliente Modbus não está conectado. Verifique a conexão na aba Comunicação antes de iniciar o ciclo.');
   client.setID(client._unitID || 1);
   if (regType === 'coil') await client.writeCoil(address, value !== 0);
   else await client.writeRegister(address, value);
@@ -833,6 +834,11 @@ async function handleDriveCommand(ws, client, clientId, params) {
 // Etapas: start_fwd → accel → hold_nominal → decel → stop → pause → start_rev → accel_rev → hold_rev → decel_rev → stop
 async function handleStartCycle(ws, client, clientId, params) {
   // params: { driveProfile, mode ('auto'|'manual'), cycles, accelTime, holdTime, decelTime, pauseTime, modbusAddress }
+  // Validar se o cliente Modbus está conectado antes de iniciar o ciclo
+  if (!client || !client.isOpen) {
+    ws.send(JSON.stringify({ type: 'cycleError', error: 'Modbus não conectado. Inicie o polling na aba Comunicação antes de usar o ciclo automático.', timestamp: Date.now() }));
+    return;
+  }
   handleStopCycle(clientId, null); // para ciclo anterior se houver
   const profile = DRIVE_CONTROL_PROFILES[params.driveProfile || 'generic'];
   if (!profile) {
