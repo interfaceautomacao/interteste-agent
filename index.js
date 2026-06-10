@@ -24,7 +24,7 @@ const http = require('http');
 
 const PORT = 9090;
 const HTTP_PORT = 7878;
-const VERSION = '2.1.6';
+const VERSION = '2.1.7';
 
 console.log(`
 ╔═══════════════════════════════════════════════════════════╗
@@ -873,7 +873,6 @@ async function handleStartCycle(ws, client, clientId, params) {
   const STEPS_PER_CYCLE = 10; // número de passos por ciclo
   const SPEED_STEPS = 10;     // quantos passos de aceleração
   let cycleCount = 0;
-  let aborted = false;
   const sendStatus = (step, direction, speedPct, phase) => {
     ws.send(JSON.stringify({ type: 'cycleStatus', cycleCount, maxCycles, step, direction, speedPct, phase, timestamp: Date.now() }));
   };
@@ -883,12 +882,16 @@ async function handleStartCycle(ws, client, clientId, params) {
     if (state) state.timeouts = state.timeouts || [];
     if (state) state.timeouts.push(t);
   });
+  const state = { aborted: false, timeouts: [] };
+  cycleIntervals.set(clientId, state);
+  // isAborted lê sempre o estado atual do objeto state (sem closure stale)
+  const isAborted = () => state.aborted;
   const runCycle = async (direction) => {
     const cmdRun = direction === 'fwd' ? profile.CMD_RUN_FWD : profile.CMD_RUN_REV;
     const dir = direction === 'fwd' ? 'Horário' : 'Anti-Horário';
     // Aceleração gradual
     sendStatus('accel', dir, 0, `Acelerando (${dir})`);
-    for (let i = 1; i <= SPEED_STEPS && !aborted; i++) {
+    for (let i = 1; i <= SPEED_STEPS && !isAborted(); i++) {
       const pct = i * 10;
       const speedVal = Math.round(pct / 100 * profile.SPEED_NOMINAL);
       await writeMbRegister(client, profile.speedRef.address, speedVal, profile.speedRef.type);
@@ -896,45 +899,44 @@ async function handleStartCycle(ws, client, clientId, params) {
       sendStatus('accel', dir, pct, `Acelerando ${pct}%`);
       await sleep(accelTime / SPEED_STEPS);
     }
-    if (aborted) return;
+    if (isAborted()) return;
     // Manter velocidade nominal
     sendStatus('hold', dir, 100, `Velocidade Nominal (${dir})`);
     await sleep(holdTime);
-    if (aborted) return;
+    if (isAborted()) return;
     // Desaceleração gradual
     sendStatus('decel', dir, 100, `Desacelerando (${dir})`);
-    for (let i = SPEED_STEPS - 1; i >= 0 && !aborted; i--) {
+    for (let i = SPEED_STEPS - 1; i >= 0 && !isAborted(); i--) {
       const pct = i * 10;
       const speedVal = Math.round(pct / 100 * profile.SPEED_NOMINAL);
       await writeMbRegister(client, profile.speedRef.address, speedVal, profile.speedRef.type);
       sendStatus('decel', dir, pct, `Desacelerando ${pct}%`);
       await sleep(decelTime / SPEED_STEPS);
     }
-    if (aborted) return;
-    // Parar
+    if (isAborted()) return;
+    // Parar — envia CMD_STOP e zera velocidade
+    await writeMbRegister(client, profile.speedRef.address, profile.SPEED_ZERO, profile.speedRef.type);
     await writeMbRegister(client, profile.controlWord.address, profile.CMD_STOP, profile.controlWord.type);
     sendStatus('stop', dir, 0, 'Parado');
     await sleep(pauseTime);
   };
-  const state = { aborted: false, timeouts: [] };
-  cycleIntervals.set(clientId, state);
   // Executar ciclos em background
   (async () => {
     try {
       ws.send(JSON.stringify({ type: 'cycleStarted', mode: params.mode, maxCycles, timestamp: Date.now() }));
-      while (!state.aborted && cycleCount < maxCycles) {
+      while (!isAborted() && cycleCount < maxCycles) {
         cycleCount++;
         ws.send(JSON.stringify({ type: 'cycleBegin', cycleNumber: cycleCount, maxCycles, timestamp: Date.now() }));
         // Sentido horário
-        aborted = state.aborted;
-        if (!aborted) await runCycle('fwd');
+        if (!isAborted()) await runCycle('fwd');
         // Sentido anti-horário
-        aborted = state.aborted;
-        if (!aborted) await runCycle('rev');
-        if (state.aborted) break;
+        if (!isAborted()) await runCycle('rev');
+        if (isAborted()) break;
         ws.send(JSON.stringify({ type: 'cycleComplete', cycleNumber: cycleCount, maxCycles, timestamp: Date.now() }));
       }
-      if (!state.aborted) {
+      if (!isAborted()) {
+        // Parada final: zera velocidade e envia CMD_STOP
+        await writeMbRegister(client, profile.speedRef.address, profile.SPEED_ZERO, profile.speedRef.type);
         await writeMbRegister(client, profile.controlWord.address, profile.CMD_STOP, profile.controlWord.type);
         ws.send(JSON.stringify({ type: 'cycleFinished', totalCycles: cycleCount, timestamp: Date.now() }));
       }
