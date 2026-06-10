@@ -24,7 +24,7 @@ const http = require('http');
 
 const PORT = 9090;
 const HTTP_PORT = 7878;
-const VERSION = '2.1.5';
+const VERSION = '2.1.6';
 
 console.log(`
 ╔═══════════════════════════════════════════════════════════╗
@@ -358,6 +358,10 @@ const DRIVE_CONTROL_PROFILES = {
   //   Bit0 = Start/Stop (1=rodar, 0=parar com rampa)
   //   Bit1 = General Enabling (1=habilita inversor, 0=desabilita)
   //   Bit2 = Direction of Rotation (0=horário, 1=anti-horário)
+  //   Bit3 = JOG (0=inativo, 1=ativo)
+  //   Bit4 = LOC/REM (0=Local/HMI, 1=Remote/Serial) ← OBRIGATÓRIO para controle serial!
+  //   Bit5 = Second Ramp Use
+  //   Bit6 = Quick Stop
   //   Bit7 = Fault Reset (1=reset de falha)
   weg: {
     controlWord:   { address: 682, type: 'holding' }, // P682 - Palavra de Controle
@@ -366,11 +370,12 @@ const DRIVE_CONTROL_PROFILES = {
     outputFreq:    { address: 2, type: 'holding' },   // P002 - Frequência de Saída
     outputCurrent: { address: 3, type: 'holding' },   // P003 - Corrente de Saída
     motorSpeed:    { address: 4, type: 'holding' },   // P004 - Velocidade do Motor
-    // Comandos de controle (P682) — conforme manual serial CFW-11 (0899.5741)
-    CMD_STOP:      0x0002, // Bit1=1 (habilita), Bit0=0 (para com rampa) — mantém inversor habilitado
-    CMD_RUN_FWD:   0x0003, // Bit1=1 (habilita), Bit0=1 (start), Bit2=0 (sentido horário)
-    CMD_RUN_REV:   0x0007, // Bit1=1 (habilita), Bit0=1 (start), Bit2=1 (sentido anti-horário)
-    CMD_RESET:     0x0082, // Bit7=1 (fault reset), Bit1=1 (habilita)
+    // Comandos de controle (P682) — conforme manual serial CFW-11 (0899.5741), Tabela 3.4
+    // Bit4=1 (LOC/REM=Remote) é OBRIGATÓRIO em todos os comandos para o inversor aceitar controle serial
+    CMD_STOP:      0x0012, // Bit4=1 (Remote), Bit1=1 (Enable), Bit0=0 (Stop)
+    CMD_RUN_FWD:   0x0013, // Bit4=1 (Remote), Bit1=1 (Enable), Bit0=1 (Start), Bit2=0 (Horário)
+    CMD_RUN_REV:   0x0017, // Bit4=1 (Remote), Bit1=1 (Enable), Bit0=1 (Start), Bit2=1 (Anti-Horário)
+    CMD_RESET:     0x0092, // Bit7=1 (Fault Reset), Bit4=1 (Remote), Bit1=1 (Enable)
     // P683: escala 13 bits com sinal — 16383 ≈ 50% da freq. máx. (P0134)
     // Para 60Hz nominal, 32767 = 60Hz. Usar 16383 para segurança nos testes.
     SPEED_NOMINAL: 16383,
