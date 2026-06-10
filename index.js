@@ -24,7 +24,7 @@ const http = require('http');
 
 const PORT = 9090;
 const HTTP_PORT = 7878;
-const VERSION = '2.1.3';
+const VERSION = '2.1.4';
 
 console.log(`
 ╔═══════════════════════════════════════════════════════════╗

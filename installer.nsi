@@ -57,6 +57,13 @@ SetCompressor /SOLID lzma
 Section "InterTeste Agent" SecMain
   SectionIn RO  ; Obrigatório
 
+  ; Encerrar o agente se estiver em execução antes de sobrescrever os arquivos
+  ; Isso evita o erro "Erro ao abrir o arquivo pra gravação: node.exe"
+  nsExec::ExecToLog 'taskkill /F /IM node.exe /FI "WINDOWTITLE eq InterTeste*" 2>nul'
+  nsExec::ExecToLog 'taskkill /F /IM interteste-agent.exe 2>nul'
+  ; Aguardar 1 segundo para o processo encerrar completamente
+  Sleep 1000
+
   SetOutPath "$INSTDIR"
 
   ; Copiar todos os arquivos do agente (incluindo Node.js portable e node_modules)
