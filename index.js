@@ -24,7 +24,7 @@ const http = require('http');
 
 const PORT = 9090;
 const HTTP_PORT = 7878;
-const VERSION = '2.1.8';
+const VERSION = '2.1.9';
 
 console.log(`
 ╔═══════════════════════════════════════════════════════════╗
@@ -598,9 +598,10 @@ async function handleTestConnection(ws, client, config) {
   let connected = false, readOk = false, readValue = null, connectTime = null;
   try {
     if (client.isOpen) { client.close(() => {}); await new Promise(r => setTimeout(r, 100)); }
-    // Bridge TCP: modbus_rtu com tcpHost configurado → conectar via TCP (conversor serial/ethernet)
-    const isBridgeTcp = (params.commType === 'modbus_rtu' || params.commType === 'modbus_rtu_serial') && params.tcpHost;
-    if (params.commType === 'modbus_tcp' || isBridgeTcp) {
+    // modbus_tcp = Modbus TCP puro (Ethernet direta, usa tcpHost)
+    // modbus_rtu = Modbus RTU Serial (porta COM/USB — usa serialPort)
+    // modbus_rtu_serial = Modbus RTU Serial (porta COM/USB — usa serialPort)
+    if (params.commType === 'modbus_tcp') {
       const t = Date.now();
       await client.connectTCP(params.tcpHost, { port: params.tcpPort || 502 });
       connectTime = Date.now() - t; connected = true;
@@ -704,9 +705,9 @@ async function handleStartPolling(ws, client, clientId, config, registers) {
   try {
     handleStopPolling(clientId);
     if (client.isOpen) { client.close(() => {}); await new Promise(r => setTimeout(r, 100)); }
-    // Bridge TCP: modbus_rtu com tcpHost configurado → conectar via TCP (conversor serial/ethernet)
-    const isBridgeTcp = (config.commType === 'modbus_rtu' || config.commType === 'modbus_rtu_serial') && config.tcpHost;
-    if (config.commType === 'modbus_tcp' || isBridgeTcp) {
+    // modbus_tcp = Modbus TCP puro (Ethernet direta, usa tcpHost)
+    // modbus_rtu / modbus_rtu_serial = Modbus RTU Serial (porta COM/USB — usa serialPort)
+    if (config.commType === 'modbus_tcp') {
       await client.connectTCP(config.tcpHost, { port: config.tcpPort || 502 });
     } else if (config.commType === 'modbus_rtu' || config.commType === 'modbus_rtu_serial') {
       await client.connectRTUBuffered(config.serialPort, { baudRate: config.serialBaudRate || 9600, dataBits: config.serialDataBits || 8, stopBits: config.serialStopBits || 1, parity: config.serialParity || 'none' });
