@@ -24,7 +24,7 @@ const http = require('http');
 
 const PORT = 9090;
 const HTTP_PORT = 7878;
-const VERSION = '2.1.9';
+const VERSION = '2.2.0';
 
 console.log(`
 ╔═══════════════════════════════════════════════════════════╗
@@ -881,16 +881,23 @@ async function handleStartCycle(ws, client, clientId, params) {
   const sendStatus = (step, direction, speedPct, phase) => {
     ws.send(JSON.stringify({ type: 'cycleStatus', cycleCount, maxCycles, step, direction, speedPct, phase, timestamp: Date.now() }));
   };
-  const sleep = (ms) => new Promise(resolve => {
-    const t = setTimeout(resolve, ms);
-    const state = cycleIntervals.get(clientId);
-    if (state) state.timeouts = state.timeouts || [];
-    if (state) state.timeouts.push(t);
-  });
   const state = { aborted: false, timeouts: [] };
   cycleIntervals.set(clientId, state);
   // isAborted lê sempre o estado atual do objeto state (sem closure stale)
   const isAborted = () => state.aborted;
+  const sleep = (ms) => new Promise((resolve) => {
+    // Verifica isAborted() a cada 200ms para responder rapidamente ao stopCycle
+    const interval = 200;
+    let elapsed = 0;
+    const tick = () => {
+      if (isAborted() || elapsed >= ms) { resolve(); return; }
+      elapsed += interval;
+      const t = setTimeout(tick, Math.min(interval, ms - elapsed + interval));
+      state.timeouts.push(t);
+    };
+    const t = setTimeout(tick, Math.min(interval, ms));
+    state.timeouts.push(t);
+  });
   const runCycle = async (direction) => {
     const cmdRun = direction === 'fwd' ? profile.CMD_RUN_FWD : profile.CMD_RUN_REV;
     const dir = direction === 'fwd' ? 'Horário' : 'Anti-Horário';
