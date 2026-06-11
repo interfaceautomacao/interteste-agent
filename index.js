@@ -22,9 +22,14 @@ const { SerialPort } = require('serialport');
 const { execSync, spawn } = require('child_process');
 const http = require('http');
 
+// Classe de erro para interrupção intencional de ciclo
+class AbortError extends Error {
+  constructor() { super('Ciclo interrompido pelo usuário'); this.name = 'AbortError'; }
+}
+
 const PORT = 9090;
 const HTTP_PORT = 7878;
-const VERSION = '2.2.0';
+const VERSION = '2.3.0';
 
 console.log(`
 ╔═══════════════════════════════════════════════════════════╗
@@ -354,15 +359,6 @@ const modbusClients = new Map();    // clientId -> ModbusRTU client for drive co
 // Registradores de controle por fabricante (Modbus)
 const DRIVE_CONTROL_PROFILES = {
   // WEG CFW-11 / CFW-700 / CFW-900
-  // P682 bits (Manual Serial CFW-11 0899.5741, Tabela 3.4):
-  //   Bit0 = Start/Stop (1=rodar, 0=parar com rampa)
-  //   Bit1 = General Enabling (1=habilita inversor, 0=desabilita)
-  //   Bit2 = Direction of Rotation (0=horário, 1=anti-horário)
-  //   Bit3 = JOG (0=inativo, 1=ativo)
-  //   Bit4 = LOC/REM (0=Local/HMI, 1=Remote/Serial) ← OBRIGATÓRIO para controle serial!
-  //   Bit5 = Second Ramp Use
-  //   Bit6 = Quick Stop
-  //   Bit7 = Fault Reset (1=reset de falha)
   weg: {
     controlWord:   { address: 682, type: 'holding' }, // P682 - Palavra de Controle
     speedRef:      { address: 683, type: 'holding' }, // P683 - Referência de Velocidade (0-32767 = 0-100%)
@@ -370,15 +366,14 @@ const DRIVE_CONTROL_PROFILES = {
     outputFreq:    { address: 2, type: 'holding' },   // P002 - Frequência de Saída
     outputCurrent: { address: 3, type: 'holding' },   // P003 - Corrente de Saída
     motorSpeed:    { address: 4, type: 'holding' },   // P004 - Velocidade do Motor
-    // Comandos de controle (P682) — conforme manual serial CFW-11 (0899.5741), Tabela 3.4
-    // Bit4=1 (LOC/REM=Remote) é OBRIGATÓRIO em todos os comandos para o inversor aceitar controle serial
-    CMD_STOP:      0x0012, // Bit4=1 (Remote), Bit1=1 (Enable), Bit0=0 (Stop)
-    CMD_RUN_FWD:   0x0013, // Bit4=1 (Remote), Bit1=1 (Enable), Bit0=1 (Start), Bit2=0 (Horário)
-    CMD_RUN_REV:   0x0017, // Bit4=1 (Remote), Bit1=1 (Enable), Bit0=1 (Start), Bit2=1 (Anti-Horário)
-    CMD_RESET:     0x0092, // Bit7=1 (Fault Reset), Bit4=1 (Remote), Bit1=1 (Enable)
-    // P683: escala 13 bits com sinal — 16383 ≈ 50% da freq. máx. (P0134)
-    // Para 60Hz nominal, 32767 = 60Hz. Usar 16383 para segurança nos testes.
-    SPEED_NOMINAL: 16383,
+    // Comandos de controle (P682)
+    // Bit0=Start/Stop, Bit1=General Enabling, Bit2=Direction (0=oposto à ref, 1=mesmo da ref)
+    CMD_STOP:      0x0002, // Bit1=1 (Enable), Bit0=0 (Stop) — mantém inversor habilitado mas parado
+    CMD_RUN_FWD:   0x0003, // Bit1=1 (Enable), Bit0=1 (Start), Bit2=0 (sentido normal/horário)
+    CMD_RUN_REV:   0x0007, // Bit1=1 (Enable), Bit0=1 (Start), Bit2=1 (sentido inverso/anti-horário)
+    CMD_RESET:     0x0082, // Bit7=1 (Fault Reset), Bit1=1 (Enable)
+    // Velocidade nominal: 32767 = 60Hz (ajustar conforme P134)
+    SPEED_NOMINAL: 32767,
     SPEED_ZERO:    0,
   },
   // Schneider ATV320 / ATV340 / ATV630 / ATV930
@@ -598,9 +593,6 @@ async function handleTestConnection(ws, client, config) {
   let connected = false, readOk = false, readValue = null, connectTime = null;
   try {
     if (client.isOpen) { client.close(() => {}); await new Promise(r => setTimeout(r, 100)); }
-    // modbus_tcp = Modbus TCP puro (Ethernet direta, usa tcpHost)
-    // modbus_rtu = Modbus RTU Serial (porta COM/USB — usa serialPort)
-    // modbus_rtu_serial = Modbus RTU Serial (porta COM/USB — usa serialPort)
     if (params.commType === 'modbus_tcp') {
       const t = Date.now();
       await client.connectTCP(params.tcpHost, { port: params.tcpPort || 502 });
@@ -705,8 +697,6 @@ async function handleStartPolling(ws, client, clientId, config, registers) {
   try {
     handleStopPolling(clientId);
     if (client.isOpen) { client.close(() => {}); await new Promise(r => setTimeout(r, 100)); }
-    // modbus_tcp = Modbus TCP puro (Ethernet direta, usa tcpHost)
-    // modbus_rtu / modbus_rtu_serial = Modbus RTU Serial (porta COM/USB — usa serialPort)
     if (config.commType === 'modbus_tcp') {
       await client.connectTCP(config.tcpHost, { port: config.tcpPort || 502 });
     } else if (config.commType === 'modbus_rtu' || config.commType === 'modbus_rtu_serial') {
@@ -797,8 +787,7 @@ function handleStopPolling(clientId) {
 // ==================== DRIVE CONTROL HANDLERS ====================
 
 async function writeMbRegister(client, address, value, regType) {
-  if (!client || !client.isOpen) throw new Error('Cliente Modbus não está conectado. Verifique a conexão na aba Comunicação antes de iniciar o ciclo.');
-  // NÃO sobrescrever o setID aqui — o endereço já foi configurado pelo handleStartCycle
+  client.setID(client._unitID || 1);
   if (regType === 'coil') await client.writeCoil(address, value !== 0);
   else await client.writeRegister(address, value);
 }
@@ -849,118 +838,211 @@ async function handleDriveCommand(ws, client, clientId, params) {
 // Ciclo de teste automático
 // Etapas: start_fwd → accel → hold_nominal → decel → stop → pause → start_rev → accel_rev → hold_rev → decel_rev → stop
 async function handleStartCycle(ws, client, clientId, params) {
-  // params: { driveProfile, mode ('auto'|'manual'), cycles, accelTime, holdTime, decelTime, pauseTime, modbusAddress }
-  // Validar se o cliente Modbus está conectado antes de iniciar o ciclo
-  if (!client || !client.isOpen) {
-    ws.send(JSON.stringify({ type: 'cycleError', error: 'Modbus não conectado. Inicie o polling na aba Comunicação antes de usar o ciclo automático.', timestamp: Date.now() }));
-    return;
-  }
+  // params: { driveProfile, mode ('auto'|'manual'), cycles, accelTime, holdTime, decelTime, pauseTime, modbusAddress, sessionRegisters }
   handleStopCycle(clientId, null); // para ciclo anterior se houver
+  // CRÍTICO: parar o polling antes do ciclo para evitar colisão no mesmo cliente Modbus
+  handleStopPolling(clientId);
   const profile = DRIVE_CONTROL_PROFILES[params.driveProfile || 'generic'];
   if (!profile) {
     ws.send(JSON.stringify({ type: 'cycleError', error: `Perfil desconhecido: ${params.driveProfile}`, timestamp: Date.now() }));
     return;
   }
-  // CRÍTICO: Pausar o polling durante o ciclo para evitar colisão de requisições no mesmo cliente Modbus
-  // A biblioteca modbus-serial é serial — não suporta leitura e escrita simultâneas
-  const pollingWasActive = pollingIntervals.has(clientId);
-  if (pollingWasActive) {
-    handleStopPolling(clientId);
-    console.log(`[${clientId}] Polling pausado para execução do ciclo automático`);
-  }
-  // Configurar o endereço Modbus correto para o ciclo
   if (params.modbusAddress) client.setID(params.modbusAddress);
+
+  // Detecta registros reais de corrente e frequência a partir dos registros da sessão
+  // Prioriza os registros do banco (endereços reais) sobre os hardcoded do perfil
+  const sessionRegs = params.sessionRegisters || [];
+  console.log(`[${clientId}] [CYCLE] sessionRegs recebidos: ${sessionRegs.length} registros`);
+  console.log(`[${clientId}] [CYCLE] Nomes dos registros:`, sessionRegs.map(r => `${r.name}(addr=${r.address},dir=${r.direction})`).join(', '));
+  const currentReg = sessionRegs.find(r =>
+    /corrente|current|amper/i.test(r.name) && (r.direction === 'read' || r.direction === 'readwrite')
+  );
+  const freqReg = sessionRegs.find(r =>
+    /freq|hz/i.test(r.name) && (r.direction === 'read' || r.direction === 'readwrite')
+  );
+  // Monta os descritores de leitura usando registros reais ou fallback do perfil
+  const currentDesc = currentReg
+    ? { address: currentReg.address, type: currentReg.registerType || 'holding', scale: currentReg.scaleFactor || 0.1 }
+    : (profile.outputCurrent ? { address: profile.outputCurrent.address, type: profile.outputCurrent.type, scale: profile.currentScale || 0.1 } : null);
+  const freqDesc = freqReg
+    ? { address: freqReg.address, type: freqReg.registerType || 'holding', scale: freqReg.scaleFactor || 0.1 }
+    : (profile.outputFreq ? { address: profile.outputFreq.address, type: profile.outputFreq.type, scale: profile.freqScale || 0.1 } : null);
+  console.log(`[${clientId}] [CYCLE] currentReg:`, currentReg ? `${currentReg.name} addr=${currentReg.address}` : 'Não encontrado (usando fallback do perfil)');
+  console.log(`[${clientId}] [CYCLE] freqReg:`, freqReg ? `${freqReg.name} addr=${freqReg.address}` : 'Não encontrado (usando fallback do perfil)');
+  console.log(`[${clientId}] [CYCLE] currentDesc:`, currentDesc);
+  console.log(`[${clientId}] [CYCLE] freqDesc:`, freqDesc);
+  console.log(`[${clientId}] [CYCLE] cliente Modbus conectado:`, client.isOpen);
   const accelTime  = (params.accelTime  || 10) * 1000; // ms
   const holdTime   = (params.holdTime   || 30) * 1000;
   const decelTime  = (params.decelTime  || 10) * 1000;
   const pauseTime  = (params.pauseTime  || 5)  * 1000;
   const maxCycles  = params.mode === 'auto' ? (params.cycles || 3) : Infinity;
-  const STEPS_PER_CYCLE = 10; // número de passos por ciclo
-  const SPEED_STEPS = 10;     // quantos passos de aceleração
+  const SPEED_STEPS = 10; // quantos passos de aceleração
   let cycleCount = 0;
-  const sendStatus = (step, direction, speedPct, phase) => {
-    ws.send(JSON.stringify({ type: 'cycleStatus', cycleCount, maxCycles, step, direction, speedPct, phase, timestamp: Date.now() }));
-  };
-  const state = { aborted: false, timeouts: [] };
+
+  // Estado compartilhado — state.aborted é a fonte de verdade
+  // Armazena client e profile para que handleStopCycle possa enviar CMD_STOP imediato
+  // Promessa de abort: rejeitada imediatamente quando state.aborted=true
+  // Permite interromper qualquer await (sleep ou write Modbus) via Promise.race
+  const state = { aborted: false, timeouts: [], rejectSleep: null, rejectAbort: null, client, profile };
+  const abortPromise = new Promise((_, reject) => { state.rejectAbort = reject; });
   cycleIntervals.set(clientId, state);
-  // isAborted lê sempre o estado atual do objeto state (sem closure stale)
-  const isAborted = () => state.aborted;
-  const sleep = (ms) => new Promise((resolve) => {
-    // Verifica isAborted() a cada 200ms para responder rapidamente ao stopCycle
-    const interval = 200;
-    let elapsed = 0;
-    const tick = () => {
-      if (isAborted() || elapsed >= ms) { resolve(); return; }
-      elapsed += interval;
-      const t = setTimeout(tick, Math.min(interval, ms - elapsed + interval));
-      state.timeouts.push(t);
-    };
-    const t = setTimeout(tick, Math.min(interval, ms));
+
+  // Write Modbus interrompível: abandona imediatamente se state.aborted=true
+  const writeReg = async (address, value, regType) => {
+    if (state.aborted) throw new AbortError();
+    await Promise.race([
+      writeMbRegister(client, address, value, regType),
+      abortPromise,
+    ]);
+    if (state.aborted) throw new AbortError();
+  };
+
+  const sendStatus = (step, direction, speedPct, phase, driveData = {}) => {
+    ws.send(JSON.stringify({ type: 'cycleStatus', cycleCount, maxCycles, step, direction, speedPct, phase,
+      current: driveData.current !== undefined ? driveData.current : null,
+      freq: driveData.freq !== undefined ? driveData.freq : null,
+      timestamp: Date.now() }));
+  };
+
+  // Sleep interrompível: rejeita imediatamente quando state.aborted=true
+  const sleep = (ms) => new Promise((resolve, reject) => {
+    if (state.aborted) { reject(new AbortError()); return; }
+    const t = setTimeout(resolve, ms);
     state.timeouts.push(t);
+    // Armazena o reject para cancelamento imediato
+    state.rejectSleep = () => { clearTimeout(t); reject(new AbortError()); };
   });
+
+  // Lê corrente e frequência de saída do inversor usando registros reais do banco
+  // Usa timeout curto (500ms) para não bloquear a parada do ciclo
+  const readDriveData = async () => {
+    if (state.aborted) return {};
+    const result = {};
+    client.setTimeout(500); // timeout curto para não bloquear abort
+    try {
+      if (currentDesc && !state.aborted) {
+        let d;
+        if (currentDesc.type === 'input') d = await client.readInputRegisters(currentDesc.address, 1);
+        else d = await client.readHoldingRegisters(currentDesc.address, 1);
+        if (!state.aborted && d && d.data) {
+          result.current = d.data[0] * currentDesc.scale;
+          console.log(`[${clientId}] [CYCLE] corrente lida: raw=${d.data[0]} scale=${currentDesc.scale} => ${result.current}A`);
+        }
+      } else if (!currentDesc) {
+        console.log(`[${clientId}] [CYCLE] AVISO: currentDesc é null, não há registro de corrente`);
+      }
+    } catch (e) {
+      console.log(`[${clientId}] [CYCLE] Erro ao ler corrente (addr=${currentDesc?.address}): ${e.message}`);
+    }
+    try {
+      if (freqDesc && !state.aborted) {
+        let d;
+        if (freqDesc.type === 'input') d = await client.readInputRegisters(freqDesc.address, 1);
+        else d = await client.readHoldingRegisters(freqDesc.address, 1);
+        if (!state.aborted && d && d.data) {
+          result.freq = d.data[0] * freqDesc.scale;
+          console.log(`[${clientId}] [CYCLE] freq lida: raw=${d.data[0]} scale=${freqDesc.scale} => ${result.freq}Hz`);
+        }
+      } else if (!freqDesc) {
+        console.log(`[${clientId}] [CYCLE] AVISO: freqDesc é null, não há registro de frequência`);
+      }
+    } catch (e) {
+      console.log(`[${clientId}] [CYCLE] Erro ao ler freq (addr=${freqDesc?.address}): ${e.message}`);
+    }
+    client.setTimeout(1000); // restaura timeout padrão
+    return result;
+  };
+
   const runCycle = async (direction) => {
+    if (state.aborted) return;
     const cmdRun = direction === 'fwd' ? profile.CMD_RUN_FWD : profile.CMD_RUN_REV;
     const dir = direction === 'fwd' ? 'Horário' : 'Anti-Horário';
+
+    // Garantir que o inversor está parado antes de iniciar (especialmente importante na inversão)
+    await writeReg(profile.controlWord.address, profile.CMD_STOP, profile.controlWord.type);
+    await writeReg(profile.speedRef.address, profile.SPEED_ZERO, profile.speedRef.type);
+    // Aguarda 500ms para o inversor processar o stop antes de iniciar novo sentido
+    await sleep(500);
+    if (state.aborted) return;
+
+    // Envia command word com o sentido correto ANTES de rampar a velocidade
+    await writeReg(profile.controlWord.address, cmdRun, profile.controlWord.type);
+    await sleep(100); // pequena pausa para o inversor aceitar o comando
+    if (state.aborted) return;
+
     // Aceleração gradual
     sendStatus('accel', dir, 0, `Acelerando (${dir})`);
-    for (let i = 1; i <= SPEED_STEPS && !isAborted(); i++) {
+    for (let i = 1; i <= SPEED_STEPS; i++) {
+      if (state.aborted) return;
       const pct = i * 10;
       const speedVal = Math.round(pct / 100 * profile.SPEED_NOMINAL);
-      await writeMbRegister(client, profile.speedRef.address, speedVal, profile.speedRef.type);
-      if (i === 1) await writeMbRegister(client, profile.controlWord.address, cmdRun, profile.controlWord.type);
-      sendStatus('accel', dir, pct, `Acelerando ${pct}%`);
+      await writeReg(profile.speedRef.address, speedVal, profile.speedRef.type);
+      const driveData = await readDriveData();
+      sendStatus('accel', dir, pct, `Acelerando ${pct}%`, driveData);
       await sleep(accelTime / SPEED_STEPS);
     }
-    if (isAborted()) return;
+    if (state.aborted) return;
     // Manter velocidade nominal
     sendStatus('hold', dir, 100, `Velocidade Nominal (${dir})`);
-    await sleep(holdTime);
-    if (isAborted()) return;
+    // Durante o hold, lê corrente periodicamente (a cada 2s)
+    const holdSamples = Math.max(1, Math.floor(holdTime / 2000));
+    for (let s = 0; s < holdSamples; s++) {
+      if (state.aborted) return;
+      await sleep(Math.min(2000, holdTime / holdSamples));
+      if (state.aborted) return;
+      const driveData = await readDriveData();
+      sendStatus('hold', dir, 100, `Velocidade Nominal (${dir})`, driveData);
+    }
+    if (state.aborted) return;
     // Desaceleração gradual
     sendStatus('decel', dir, 100, `Desacelerando (${dir})`);
-    for (let i = SPEED_STEPS - 1; i >= 0 && !isAborted(); i--) {
+    for (let i = SPEED_STEPS - 1; i >= 0; i--) {
+      if (state.aborted) return;
       const pct = i * 10;
       const speedVal = Math.round(pct / 100 * profile.SPEED_NOMINAL);
-      await writeMbRegister(client, profile.speedRef.address, speedVal, profile.speedRef.type);
-      sendStatus('decel', dir, pct, `Desacelerando ${pct}%`);
+      await writeReg(profile.speedRef.address, speedVal, profile.speedRef.type);
+      const driveData = await readDriveData();
+      sendStatus('decel', dir, pct, `Desacelerando ${pct}%`, driveData);
       await sleep(decelTime / SPEED_STEPS);
     }
-    if (isAborted()) return;
-    // Parar — envia CMD_STOP e zera velocidade
-    await writeMbRegister(client, profile.speedRef.address, profile.SPEED_ZERO, profile.speedRef.type);
-    await writeMbRegister(client, profile.controlWord.address, profile.CMD_STOP, profile.controlWord.type);
+    if (state.aborted) return;
+    // Parar
+    await writeReg(profile.controlWord.address, profile.CMD_STOP, profile.controlWord.type);
+    await writeReg(profile.speedRef.address, profile.SPEED_ZERO, profile.speedRef.type);
     sendStatus('stop', dir, 0, 'Parado');
     await sleep(pauseTime);
   };
+
   // Executar ciclos em background
   (async () => {
     try {
       ws.send(JSON.stringify({ type: 'cycleStarted', mode: params.mode, maxCycles, timestamp: Date.now() }));
-      while (!isAborted() && cycleCount < maxCycles) {
+      while (!state.aborted && cycleCount < maxCycles) {
         cycleCount++;
         ws.send(JSON.stringify({ type: 'cycleBegin', cycleNumber: cycleCount, maxCycles, timestamp: Date.now() }));
         // Sentido horário
-        if (!isAborted()) await runCycle('fwd');
+        await runCycle('fwd');
         // Sentido anti-horário
-        if (!isAborted()) await runCycle('rev');
-        if (isAborted()) break;
+        if (!state.aborted) await runCycle('rev');
+        if (state.aborted) break;
         ws.send(JSON.stringify({ type: 'cycleComplete', cycleNumber: cycleCount, maxCycles, timestamp: Date.now() }));
       }
-      if (!isAborted()) {
-        // Parada final: zera velocidade e envia CMD_STOP
-        await writeMbRegister(client, profile.speedRef.address, profile.SPEED_ZERO, profile.speedRef.type);
+      if (!state.aborted) {
         await writeMbRegister(client, profile.controlWord.address, profile.CMD_STOP, profile.controlWord.type);
         ws.send(JSON.stringify({ type: 'cycleFinished', totalCycles: cycleCount, timestamp: Date.now() }));
       }
+      // Notifica o frontend para retomar o polling (que foi pausado ao iniciar o ciclo)
+      ws.send(JSON.stringify({ type: 'cyclePollingResumed', timestamp: Date.now() }));
     } catch (err) {
-      ws.send(JSON.stringify({ type: 'cycleError', error: err.message, timestamp: Date.now() }));
+      if (!(err instanceof AbortError)) {
+        ws.send(JSON.stringify({ type: 'cycleError', error: err.message, timestamp: Date.now() }));
+      }
+      // Se AbortError: ciclo foi parado intencionalmente, não reportar como erro
+      // Notifica o frontend para retomar o polling mesmo em caso de erro/abort
+      try { ws.send(JSON.stringify({ type: 'cyclePollingResumed', timestamp: Date.now() })); } catch (_) {}
     } finally {
       cycleIntervals.delete(clientId);
-      // Retomar o polling se estava ativo antes do ciclo
-      if (pollingWasActive) {
-        ws.send(JSON.stringify({ type: 'cyclePollingResumed', message: 'Polling retomado após ciclo', timestamp: Date.now() }));
-        console.log(`[${clientId}] Ciclo concluído. Polling deve ser retomado pelo frontend.`);
-      }
     }
   })();
 }
@@ -969,10 +1051,30 @@ function handleStopCycle(clientId, ws) {
   const state = cycleIntervals.get(clientId);
   if (state) {
     state.aborted = true;
+    // Cancela todos os timeouts pendentes
     (state.timeouts || []).forEach(t => clearTimeout(t));
+    // Rejeita imediatamente o sleep atual (se houver), sem esperar o timeout expirar
+    if (typeof state.rejectSleep === 'function') {
+      try { state.rejectSleep(); } catch (_) {}
+      state.rejectSleep = null;
+    }
+    // Rejeita imediatamente qualquer writeReg em andamento via Promise.race
+    if (typeof state.rejectAbort === 'function') {
+      try { state.rejectAbort(new AbortError()); } catch (_) {}
+      state.rejectAbort = null;
+    }
+    // Envia CMD_STOP imediato ao inversor via Modbus (não aguarda resposta)
+    if (state.client && state.profile) {
+      writeMbRegister(state.client, state.profile.controlWord.address, state.profile.CMD_STOP, state.profile.controlWord.type)
+        .catch(() => {}); // ignora erros de comunicação no stop de emergência
+    }
     cycleIntervals.delete(clientId);
   }
-  if (ws) ws.send(JSON.stringify({ type: 'cycleStopped', timestamp: Date.now() }));
+  if (ws) {
+    ws.send(JSON.stringify({ type: 'cycleStopped', timestamp: Date.now() }));
+    // Notifica o frontend para retomar o polling (que foi pausado ao iniciar o ciclo)
+    ws.send(JSON.stringify({ type: 'cyclePollingResumed', timestamp: Date.now() }));
+  }
 }
 
 // ==================== POWER METER HANDLERS ====================
