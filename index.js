@@ -29,7 +29,7 @@ class AbortError extends Error {
 
 const PORT = 9090;
 const HTTP_PORT = 7878;
-const VERSION = '2.3.6';
+const VERSION = '2.3.7';
 
 console.log(`
 ╔═══════════════════════════════════════════════════════════╗
@@ -893,6 +893,8 @@ async function handleStartCycle(ws, client, clientId, params) {
   console.log(`[${clientId}] [CYCLE] freqReg:`, freqReg ? `${freqReg.name} addr=${freqReg.address}` : 'Não encontrado (usando fallback do perfil)');
   console.log(`[${clientId}] [CYCLE] currentDesc:`, currentDesc);
   console.log(`[${clientId}] [CYCLE] freqDesc:`, freqDesc);
+  console.log(`[${clientId}] [CYCLE] speedReg:`, speedReg ? `${speedReg.name} addr=${speedReg.address} dir=${speedReg.direction} scaleFactor=${speedReg.scaleFactor}` : 'Não encontrado');
+  console.log(`[${clientId}] [CYCLE] speedDesc:`, speedDesc);
   console.log(`[${clientId}] [CYCLE] cliente Modbus conectado:`, client.isOpen);
   const accelTime  = (params.accelTime  || 10) * 1000; // ms
   const holdTime   = (params.holdTime   || 30) * 1000;
@@ -937,57 +939,60 @@ async function handleStartCycle(ws, client, clientId, params) {
     state.rejectSleep = () => { clearTimeout(t); reject(new AbortError()); };
   });
 
-  // Lê corrente e frequência de saída do inversor usando registros reais do banco
-  // Usa timeout curto (500ms) para não bloquear a parada do ciclo
+  // Cache do último valor válido lido — evita que falhas pontuais enviem null para o gráfico
+  // Inicializa com 0 quando o registrador existe (para garantir que o frontend sempre plote)
+  const lastDriveData = { current: currentDesc ? 0 : null, freq: freqDesc ? 0 : null, speed: speedDesc ? 0 : null };
+  // Lê corrente, frequência e RPM do inversor usando registros reais do banco
+  // Leitura sequencial (modbus-serial não suporta paralelo na mesma conexão)
+  // Timeout de 1500ms por leitura; em caso de falha, mantém o último valor válido
   const readDriveData = async () => {
-    if (state.aborted) return {};
-    const result = {};
-    client.setTimeout(500); // timeout curto para não bloquear abort
-    try {
-      if (currentDesc && !state.aborted) {
+    if (state.aborted) return { ...lastDriveData };
+    client.setTimeout(1500); // timeout generoso para evitar falsos timeouts
+    // Corrente
+    if (currentDesc && !state.aborted) {
+      try {
         let d;
         if (currentDesc.type === 'input') d = await client.readInputRegisters(currentDesc.address, 1);
         else d = await client.readHoldingRegisters(currentDesc.address, 1);
-        if (!state.aborted && d && d.data) {
-          result.current = d.data[0] * currentDesc.scale;
-          console.log(`[${clientId}] [CYCLE] corrente lida: raw=${d.data[0]} scale=${currentDesc.scale} => ${result.current}A`);
+        if (d && d.data && d.data.length > 0) {
+          lastDriveData.current = d.data[0] * currentDesc.scale;
+          console.log(`[${clientId}] [CYCLE] corrente: raw=${d.data[0]} scale=${currentDesc.scale} => ${lastDriveData.current}A`);
         }
-      } else if (!currentDesc) {
-        console.log(`[${clientId}] [CYCLE] AVISO: currentDesc é null, não há registro de corrente`);
+      } catch (e) {
+        console.log(`[${clientId}] [CYCLE] Erro corrente (addr=${currentDesc.address}): ${e.message} — mantendo último valor: ${lastDriveData.current}`);
       }
-    } catch (e) {
-      console.log(`[${clientId}] [CYCLE] Erro ao ler corrente (addr=${currentDesc?.address}): ${e.message}`);
     }
-    try {
-      if (freqDesc && !state.aborted) {
+    // Frequência
+    if (freqDesc && !state.aborted) {
+      try {
         let d;
         if (freqDesc.type === 'input') d = await client.readInputRegisters(freqDesc.address, 1);
         else d = await client.readHoldingRegisters(freqDesc.address, 1);
-        if (!state.aborted && d && d.data) {
-          result.freq = d.data[0] * freqDesc.scale;
-          console.log(`[${clientId}] [CYCLE] freq lida: raw=${d.data[0]} scale=${freqDesc.scale} => ${result.freq}Hz`);
+        if (d && d.data && d.data.length > 0) {
+          lastDriveData.freq = d.data[0] * freqDesc.scale;
+          console.log(`[${clientId}] [CYCLE] freq: raw=${d.data[0]} scale=${freqDesc.scale} => ${lastDriveData.freq}Hz`);
         }
-      } else if (!freqDesc) {
-        console.log(`[${clientId}] [CYCLE] AVISO: freqDesc é null, não há registro de frequência`);
+      } catch (e) {
+        console.log(`[${clientId}] [CYCLE] Erro freq (addr=${freqDesc.address}): ${e.message} — mantendo último valor: ${lastDriveData.freq}`);
       }
-    } catch (e) {
-      console.log(`[${clientId}] [CYCLE] Erro ao ler freq (addr=${freqDesc?.address}): ${e.message}`);
     }
-    try {
-      if (speedDesc && !state.aborted) {
+    // RPM / Velocidade
+    if (speedDesc && !state.aborted) {
+      try {
         let d;
         if (speedDesc.type === 'input') d = await client.readInputRegisters(speedDesc.address, 1);
         else d = await client.readHoldingRegisters(speedDesc.address, 1);
-        if (!state.aborted && d && d.data) {
-          result.speed = d.data[0] * speedDesc.scale;
-          console.log(`[${clientId}] [CYCLE] rpm lido: raw=${d.data[0]} scale=${speedDesc.scale} => ${result.speed}rpm`);
+        if (d && d.data && d.data.length > 0) {
+          lastDriveData.speed = d.data[0] * speedDesc.scale;
+          console.log(`[${clientId}] [CYCLE] rpm: raw=${d.data[0]} scale=${speedDesc.scale} => ${lastDriveData.speed}rpm`);
         }
+      } catch (e) {
+        console.log(`[${clientId}] [CYCLE] Erro rpm (addr=${speedDesc.address}): ${e.message} — mantendo último valor: ${lastDriveData.speed}`);
       }
-    } catch (e) {
-      console.log(`[${clientId}] [CYCLE] Erro ao ler rpm (addr=${speedDesc?.address}): ${e.message}`);
     }
     client.setTimeout(1000); // restaura timeout padrão
-    return result;
+    // Retorna cópia do cache — nunca retorna null se já houve uma leitura bem-sucedida
+    return { ...lastDriveData };
   };
 
   const runCycle = async (direction) => {
@@ -1008,7 +1013,7 @@ async function handleStartCycle(ws, client, clientId, params) {
     if (state.aborted) return;
 
     // Aceleração gradual
-    sendStatus('accel', dir, 0, `Acelerando (${dir})`);
+    sendStatus('accel', dir, 0, `Acelerando (${dir})`, { ...lastDriveData });
     for (let i = 1; i <= SPEED_STEPS; i++) {
       if (state.aborted) return;
       const pct = i * 10;
@@ -1020,7 +1025,7 @@ async function handleStartCycle(ws, client, clientId, params) {
     }
     if (state.aborted) return;
     // Manter velocidade nominal
-    sendStatus('hold', dir, 100, `Velocidade Nominal (${dir})`);
+    sendStatus('hold', dir, 100, `Velocidade Nominal (${dir})`, { ...lastDriveData });
     // Durante o hold, lê corrente periodicamente (a cada 2s)
     const holdSamples = Math.max(1, Math.floor(holdTime / 2000));
     for (let s = 0; s < holdSamples; s++) {
@@ -1032,7 +1037,7 @@ async function handleStartCycle(ws, client, clientId, params) {
     }
     if (state.aborted) return;
     // Desaceleração gradual
-    sendStatus('decel', dir, 100, `Desacelerando (${dir})`);
+    sendStatus('decel', dir, 100, `Desacelerando (${dir})`, { ...lastDriveData });
     for (let i = SPEED_STEPS - 1; i >= 0; i--) {
       if (state.aborted) return;
       const pct = i * 10;
@@ -1046,7 +1051,7 @@ async function handleStartCycle(ws, client, clientId, params) {
     // Parar
     await writeReg(profile.controlWord.address, profile.CMD_STOP, profile.controlWord.type);
     await writeReg(profile.speedRef.address, profile.SPEED_ZERO, profile.speedRef.type);
-    sendStatus('stop', dir, 0, 'Parado');
+    sendStatus('stop', dir, 0, 'Parado', { current: 0, freq: 0, speed: 0 });
     await sleep(pauseTime);
   };
 
