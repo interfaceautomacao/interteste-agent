@@ -29,7 +29,7 @@ class AbortError extends Error {
 
 const PORT = 9090;
 const HTTP_PORT = 7878;
-const VERSION = '2.3.1';
+const VERSION = '2.3.2';
 
 console.log(`
 ╔═══════════════════════════════════════════════════════════╗
