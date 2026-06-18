@@ -29,7 +29,7 @@ class AbortError extends Error {
 
 const PORT = 9090;
 const HTTP_PORT = 7878;
-const VERSION = '2.3.2';
+const VERSION = '2.3.3';
 
 console.log(`
 ╔═══════════════════════════════════════════════════════════╗
@@ -847,6 +847,9 @@ async function handleStartCycle(ws, client, clientId, params) {
     return;
   }
   handleStopCycle(clientId, null); // para ciclo anterior se houver
+  // Notificar frontend IMEDIATAMENTE que ciclo está começando (antes de parar polling)
+  // Isso permite que o frontend sete isCycleRunningRef=true antes de qualquer startPolling ser disparado
+  ws.send(JSON.stringify({ type: 'cycleStarting', timestamp: Date.now() }));
   // CRÍTICO: parar o polling antes do ciclo para evitar colisão no mesmo cliente Modbus
   handleStopPolling(clientId);
   const profile = DRIVE_CONTROL_PROFILES[params.driveProfile || 'generic'];

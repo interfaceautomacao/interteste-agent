@@ -1,6 +1,6 @@
 {
   "name": "interteste-agent",
-  "version": "2.3.2",
+  "version": "2.3.3",
   "description": "Agente local para comunicação Modbus TCP/RTU e CANopen/CAN via USB-CAN do InterTeste",
   "main": "index.js",
   "bin": "index.js",
