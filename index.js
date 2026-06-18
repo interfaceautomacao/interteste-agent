@@ -839,6 +839,13 @@ async function handleDriveCommand(ws, client, clientId, params) {
 // Etapas: start_fwd → accel → hold_nominal → decel → stop → pause → start_rev → accel_rev → hold_rev → decel_rev → stop
 async function handleStartCycle(ws, client, clientId, params) {
   // params: { driveProfile, mode ('auto'|'manual'), cycles, accelTime, holdTime, decelTime, pauseTime, modbusAddress, sessionRegisters }
+  // Proteção contra startCycle duplicado: se já há um ciclo rodando, ignorar
+  const existingState = cycleIntervals.get(clientId);
+  if (existingState && !existingState.aborted) {
+    console.log(`[${clientId}] [CYCLE] startCycle ignorado — ciclo já está rodando`);
+    ws.send(JSON.stringify({ type: 'cycleError', error: 'Ciclo já está em execução. Pare o ciclo atual antes de iniciar um novo.', timestamp: Date.now() }));
+    return;
+  }
   handleStopCycle(clientId, null); // para ciclo anterior se houver
   // CRÍTICO: parar o polling antes do ciclo para evitar colisão no mesmo cliente Modbus
   handleStopPolling(clientId);
