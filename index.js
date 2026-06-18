@@ -29,7 +29,7 @@ class AbortError extends Error {
 
 const PORT = 9090;
 const HTTP_PORT = 7878;
-const VERSION = '2.3.3';
+const VERSION = '2.3.4';
 
 console.log(`
 ╔═══════════════════════════════════════════════════════════╗
@@ -500,7 +500,11 @@ wss.on('connection', (ws) => {
         case 'readRegisters': await handleReadRegisters(ws, mbClient, data.params); break;
         case 'writeRegister': await handleWriteRegister(ws, mbClient, data.params); break;
         case 'startPolling':
-          if (isCanType) await handleStartCanPolling(ws, clientId, data.config);
+          // Bloquear startPolling se ciclo estiver rodando
+          if (cycleIntervals.has(clientId)) {
+            console.log(`[${clientId}] startPolling ignorado — ciclo ativo`);
+            ws.send(JSON.stringify({ type: 'pollingBlocked', reason: 'cycle_active' }));
+          } else if (isCanType) await handleStartCanPolling(ws, clientId, data.config);
           else await handleStartPolling(ws, mbClient, clientId, data.config, data.registers);
           break;
         case 'stopPolling':
