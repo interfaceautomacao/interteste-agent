@@ -29,7 +29,7 @@ class AbortError extends Error {
 
 const PORT = 9090;
 const HTTP_PORT = 7878;
-const VERSION = '2.3.4';
+const VERSION = '2.3.5';
 
 console.log(`
 ╔═══════════════════════════════════════════════════════════╗
@@ -722,7 +722,8 @@ async function handleStartPolling(ws, client, clientId, config, registers) {
               default: throw new Error(`Tipo inválido: ${reg.registerType}`);
             }
             const rawValue = data.data[0];
-            const value = reg.multiplier && reg.multiplier !== 1 ? rawValue * reg.multiplier : rawValue;
+            const sf = parseFloat(reg.scaleFactor) || reg.multiplier || 1;
+            const value = sf !== 1 ? rawValue * sf : rawValue;
             readings.push({ registerId: reg.id, address: reg.address, registerType: reg.registerType || 'holding', rawValue, value, isError: false, error: null });
           } catch (regErr) {
             readings.push({ registerId: reg.id, address: reg.address, registerType: reg.registerType || 'holding', rawValue: null, value: null, isError: true, error: regErr.message });
