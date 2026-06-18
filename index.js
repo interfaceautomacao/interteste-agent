@@ -29,7 +29,7 @@ class AbortError extends Error {
 
 const PORT = 9090;
 const HTTP_PORT = 7878;
-const VERSION = '2.3.5';
+const VERSION = '2.3.6';
 
 console.log(`
 ╔═══════════════════════════════════════════════════════════╗
@@ -875,13 +875,20 @@ async function handleStartCycle(ws, client, clientId, params) {
   const freqReg = sessionRegs.find(r =>
     /freq|hz/i.test(r.name) && (r.direction === 'read' || r.direction === 'readwrite')
   );
+  const speedReg = sessionRegs.find(r =>
+    /rpm|velocidade|speed|rotacao|rotação/i.test(r.name) && (r.direction === 'read' || r.direction === 'readwrite')
+  );
   // Monta os descritores de leitura usando registros reais ou fallback do perfil
+  // parseFloat garante que scaleFactor string do banco seja convertido para número
   const currentDesc = currentReg
-    ? { address: currentReg.address, type: currentReg.registerType || 'holding', scale: currentReg.scaleFactor || 0.1 }
+    ? { address: currentReg.address, type: currentReg.registerType || 'holding', scale: parseFloat(currentReg.scaleFactor) || 0.1 }
     : (profile.outputCurrent ? { address: profile.outputCurrent.address, type: profile.outputCurrent.type, scale: profile.currentScale || 0.1 } : null);
   const freqDesc = freqReg
-    ? { address: freqReg.address, type: freqReg.registerType || 'holding', scale: freqReg.scaleFactor || 0.1 }
-    : (profile.outputFreq ? { address: profile.outputFreq.address, type: profile.outputFreq.type, scale: profile.freqScale || 0.1 } : null);
+    ? { address: freqReg.address, type: freqReg.registerType || 'holding', scale: parseFloat(freqReg.scaleFactor) || 0.01 }
+    : (profile.outputFreq ? { address: profile.outputFreq.address, type: profile.outputFreq.type, scale: profile.freqScale || 0.01 } : null);
+  const speedDesc = speedReg
+    ? { address: speedReg.address, type: speedReg.registerType || 'holding', scale: parseFloat(speedReg.scaleFactor) || 1 }
+    : (profile.motorSpeed ? { address: profile.motorSpeed.address, type: profile.motorSpeed.type, scale: profile.speedScale || 1 } : null);
   console.log(`[${clientId}] [CYCLE] currentReg:`, currentReg ? `${currentReg.name} addr=${currentReg.address}` : 'Não encontrado (usando fallback do perfil)');
   console.log(`[${clientId}] [CYCLE] freqReg:`, freqReg ? `${freqReg.name} addr=${freqReg.address}` : 'Não encontrado (usando fallback do perfil)');
   console.log(`[${clientId}] [CYCLE] currentDesc:`, currentDesc);
@@ -917,6 +924,7 @@ async function handleStartCycle(ws, client, clientId, params) {
     ws.send(JSON.stringify({ type: 'cycleStatus', cycleCount, maxCycles, step, direction, speedPct, phase,
       current: driveData.current !== undefined ? driveData.current : null,
       freq: driveData.freq !== undefined ? driveData.freq : null,
+      speed: driveData.speed !== undefined ? driveData.speed : null,
       timestamp: Date.now() }));
   };
 
@@ -964,6 +972,19 @@ async function handleStartCycle(ws, client, clientId, params) {
       }
     } catch (e) {
       console.log(`[${clientId}] [CYCLE] Erro ao ler freq (addr=${freqDesc?.address}): ${e.message}`);
+    }
+    try {
+      if (speedDesc && !state.aborted) {
+        let d;
+        if (speedDesc.type === 'input') d = await client.readInputRegisters(speedDesc.address, 1);
+        else d = await client.readHoldingRegisters(speedDesc.address, 1);
+        if (!state.aborted && d && d.data) {
+          result.speed = d.data[0] * speedDesc.scale;
+          console.log(`[${clientId}] [CYCLE] rpm lido: raw=${d.data[0]} scale=${speedDesc.scale} => ${result.speed}rpm`);
+        }
+      }
+    } catch (e) {
+      console.log(`[${clientId}] [CYCLE] Erro ao ler rpm (addr=${speedDesc?.address}): ${e.message}`);
     }
     client.setTimeout(1000); // restaura timeout padrão
     return result;
